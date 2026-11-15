@@ -229,7 +229,7 @@ function ai_replay_secs(string $type, array $d): float
     $fly = 0.0;
     foreach (array_merge($d['projectiles'] ?? [], $d['bombs'] ?? []) as $p) $fly = max($fly, ($p['t0'] + $p['dur']) / 1.45);
     $s = ($type === 'shot' ? .8 : 0) + $fly + 1.4;
-    if ($type === 'turn') $s += !empty($d['crates']) ? 2.6 : (!empty($d['sudden']['first']) ? 1.8 : 1.0);
+    if ($type === 'turn') $s += !empty($d['crates']) ? 2.6 : (!empty($d['sudden']['first']) ? 1.8 : (count(array_diff(array_keys($d), ['turn', 'ops', 'falls', 'regen', 'deaths', 'wind'])) || $d['ops'] ? 1.0 : -.6));
     if (!empty($d['deaths'])) $s += 1.2;
     return $s;
 }

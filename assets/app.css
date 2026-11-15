@@ -107,3 +107,21 @@ main.narrow{max-width:560px;margin:24px auto;padding:0 16px}
 #aiBots{margin-top:12px}
 .set-ro{font-size:15px;color:var(--dim)} .set-ro b{color:var(--ink)}
 @media (max-width:480px){.tabs button{font-size:14px;padding:6px 7px}}
+
+/* admin page */
+.admin{max-width:1120px;margin:22px auto;padding:0 18px;display:flex;flex-direction:column;gap:18px}
+.admin-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}
+.admin-stats div{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.admin-stats b{display:block;font:400 26px 'Black Ops One'}
+.admin-stats span{color:var(--dim);font-size:14px}
+.admin-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.btn.danger{background:var(--red);color:#fff}
+.btn.sm{padding:5px 12px;font-size:13px}
+.tbl-wrap{overflow-x:auto}
+.tbl tr.stuck td{background:rgba(240,180,41,.07)}
+.tbl .r{text-align:right}
+.tbl .msg{font-size:13px;color:var(--dim);word-break:break-word}
+.tbl .nowrap{white-space:nowrap}
+.warn{color:var(--accent);font-weight:700}
+.admin-link{color:var(--accent);font-weight:700;text-decoration:none}
+@media (max-width:640px){.admin-stats{grid-template-columns:repeat(2,1fr)}.admin{padding:0 10px}}

@@ -28,6 +28,10 @@ const BASE_WEAPONS = ['shell', 'heavy', 'cluster'];
 const LAVA_BOMB = ['radius' => 5.5, 'dmg' => 30, 'split' => 0];
 const START_AMMO = ['heavy' => 3, 'cluster' => 2];
 const BUILDING_HP = 120;
+const MAX_HP = 100;
+
+/** Hit points a living tank repairs at the start of its own turn (rules 'regen'; older matches use the site setting). */
+function regen_rate(array $rules): int { return max(0, (int)($rules['regen'] ?? cfg('regen_per_turn', 3))); }
 
 function rnd(): float { return mt_rand() / mt_getrandmax(); }
 function f32(float $v): float { return unpack('g', pack('g', $v))[1]; }
@@ -784,7 +788,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
  * $prevSeat is the tank whose turn just ended (shields count down on enemy turns).
  * Returns the replay record for a 'turn' event, or null if nothing happened.
  * ===================================================================== */
-function start_turn(Terrain $t, array &$players, array &$objects, array $rules, int $turn, ?int $prevSeat = null): ?array
+function start_turn(Terrain $t, array &$players, array &$objects, array $rules, int $turn, ?int $prevSeat = null, ?int $seat = null): ?array
 {
     $ops = []; $out = ['turn' => $turn]; $did = false;
 
@@ -847,6 +851,15 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
     $out['ops'] = $ops;
     $out['falls'] = $did ? settle($t, $players, $rules) : [];
     settle_crates($t, $objects);
+    // heal over time: the tank whose turn it is repairs a little, after this turn's damage, until sudden death
+    if ($seat !== null && $turn < SD_TURN && ($r = regen_rate($rules)) > 0 && isset($players[$seat])) {
+        $me = &$players[$seat];
+        if ($me['alive'] && $me['hp'] > 0 && $me['hp'] < MAX_HP) {
+            $heal = min($r, MAX_HP - $me['hp']); $me['hp'] += $heal;
+            $out['regen'] = ['seat' => $seat, 'heal' => $heal]; $did = true;
+        }
+        unset($me);
+    }
     $every = max(1, (int)($rules['crate_every'] ?? CRATE_EVERY));
     if ($turn % $every === 0 && ($c = drop_crate($t, $players, $objects, $rules, $turn))) {
         $out['crates'] = [$c]; $did = true;

@@ -13,7 +13,7 @@ const AT = require('../assets/terrain.js');
 const sims = JSON.parse(fs.readFileSync(process.argv[2] || '/tmp/sims.json', 'utf8'));
 const f32 = b64 => { const b = Buffer.from(b64, 'base64'); return new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)); };
 
-let failed = 0, drives = 0, driveBad = 0, allDrives = 0, allBad = 0;
+let regens = 0, failed = 0, drives = 0, driveBad = 0, allDrives = 0, allBad = 0;
 for (const m of sims) {
   const H0 = f32(m.initial), n = Math.round(Math.sqrt(H0.length)) - 1;
   if (n !== m.rules.n) throw new Error('size mismatch');
@@ -51,6 +51,7 @@ for (const m of sims) {
     for (const pr of d.projectiles || []) boom(pr.boom);
     if (d.sudden) for (const h of d.sudden.drain) hurt(h.seat, h.dmg);
     for (const f of d.falls) { P[f.seat].y = f.y; hurt(f.seat, f.dmg); }
+    if (d.regen) { P[d.regen.seat].hp += d.regen.heal; regens++; }
     restCrates();
     for (const c of d.crates || []) O[c.id] = { ...c };
     for (const s of d.deaths) P[s].alive = false;
@@ -70,6 +71,7 @@ for (const m of sims) {
               `${String(crates).padStart(2)} crates  cells differing: ${diff}${diff ? ` (max ${maxd})` : ''}  tanks off: ${pBad}  objects off: ${oBad}  drives: ${drives}${driveBad ? ` (${driveBad} PLANNED DIFFERENTLY)` : ''}`);
   drives = 0; driveBad = 0;
 }
+console.log(`Heal-over-time events replayed: ${regens}`);
 console.log(`Drives: ${allDrives}, browser preview planned differently from the server: ${allBad}`);
 console.log(failed ? `\n${failed} match(es) FAILED` : `\nAll ${sims.length} matches replay identically.`);
 process.exit(failed ? 1 : 0);

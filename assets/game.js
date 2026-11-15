@@ -973,13 +973,19 @@ function startTurnEvent(e) {
     if (d.sudden.first) msgs.push('Sudden death!');
     for (const h of d.sudden.drain) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); popup(`-${h.dmg}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff8a8a'); }
   }
+  if (d.regen) {                                               // heal over time: the tank whose turn it is repairs a little
+    const Q = S.P[d.regen.seat]; Q.hp = Math.min(100, Q.hp + d.regen.heal);
+    popup(`+${d.regen.heal}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#7bd389');
+  }
   if (msgs.length) banner(msgs.join(' '), 2200);
+  const only = d.regen && !projs0(d) && !d.crates && !d.sudden && !d.snow && !d.burn && !d.erupt && !(d.shield_end || []).length && !(d.fire_end || []).length;
   const projs = prepProjs(d.bombs);
   S.playing = { kind: 'shot', e, P: null, owner: null, aim: null, phase: projs.length ? 'fly' : 'pause', t: 0, T: 0,
                 projs, falls: d.falls, deaths: d.deaths, ops: d.ops.length,
-                wait: d.crates ? 2.4 : d.sudden && d.sudden.first ? 1.6 : d.snow && !projs.length ? .5 : d.burn ? 1.1 : .9 };
+                wait: d.crates ? 2.4 : d.sudden && d.sudden.first ? 1.6 : only ? .35 : d.snow && !projs.length ? .5 : d.burn ? 1.1 : .9 };
   syncUI();
 }
+const projs0 = d => (d.bombs || []).length > 0;
 function lerpAngle(a, b, k) { const d = ((b - a + 540) % 360) - 180; return (a + d*k + 360) % 360; }
 function updateEvent(dt) {
   const pl = S.playing;
@@ -1103,7 +1109,7 @@ function boardStatus() {
   if (m.status === 'finished') return '';
   const out = [];
   if (m.turn >= S.map.sudden_turn) out.push(`<b class="sd">SUDDEN DEATH</b> −${S.map.sudden_drain ?? 5} hp a turn`);
-  else if (m.turn >= S.map.sudden_turn - 5) out.push(`Sudden death in ${S.map.sudden_turn - m.turn} turn${S.map.sudden_turn - m.turn > 1 ? 's' : ''}`);
+  else if (m.turn >= S.map.sudden_turn - 5) out.push(`Sudden death in ${S.map.sudden_turn - m.turn} turn${S.map.sudden_turn - m.turn > 1 ? 's' : ''}${S.map.regen ? ' (repairs stop)' : ''}`);
   if (r.erupt_every) { const k = r.erupt_every - (m.turn % r.erupt_every); out.push(`Eruption in ${k} turn${k > 1 ? 's' : ''}`); }
   return out.join(' · ');
 }
@@ -1148,6 +1154,11 @@ function showEnd() {
   S.endShown = true;
   const rows = [...S.P].sort((a, b) => (a.placement || 9) - (b.placement || 9));
   const me = S.P[S.me], w = rows.filter(r => r.placement === 1);
+  if (S.match.ended === 'admin') {                           // ended from the admin page: no result
+    $('#eTitle').textContent = 'Battle ended by the site admin';
+    $('#eTable').innerHTML = `<tr><td class="unrated">No result: ratings, wins and matches played are unchanged.</td></tr>`;
+    $('#ovEnd').classList.add('show'); marker.visible = false; return;
+  }
   $('#eTitle').innerHTML = me.placement === 1 && w.length === 1 ? 'Victory!' : w.length === 1 ? `<span style="color:${w[0].color.css}">${esc(w[0].name)}</span> wins` : 'Draw';
   const ord = n => ['', '1st', '2nd', '3rd', '4th'][n] || n;
   const rated = !S.match.game_mode || S.match.game_mode === 'ranked';

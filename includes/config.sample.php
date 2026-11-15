@@ -27,6 +27,9 @@ return [
     'crate_max'     => 1,            // most crates on the field at once
     'crate_radius'  => 15,           // crates land anywhere inside a circle this wide (metres) around the point between the tanks
     'move_per_turn' => 10,           // metres a tank may drive on its turn before firing (0 turns driving off)
+    'regen_per_turn' => 3,           // hp a tank repairs at the start of its own turn, up to 100, until sudden death (0 = off)
+    // Usernames that can open admin.php (end stuck matches, clear the queue, "restart" the game).
+    // 'admins' => ['yourname'],
     'allow_register'=> true,         // set false to close sign-ups
     'alias_cooldown_hours' => 24,    // how often a player may change the name others see
     // Extra words to block in usernames and names, on top of the built-in list in includes/names.php.

@@ -12,7 +12,7 @@
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit;
 define('ART3D', true);
-$GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10];
+$GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10, 'regen_per_turn' => 3];
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
 require dirname(__DIR__) . '/includes/engine.php';
 
@@ -58,7 +58,8 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
         if (isset(FX::$e['winds'][$turn])) { [$wa, $ws] = FX::$e['winds'][$turn]; unset(FX::$e['winds'][$turn]); }
         else next_wind($wa, $ws, $rules, $old, $turn);
         FX::$e['double'] = null; FX::$e['moved'] = null;
-        $fx = start_turn($t, $players, $objects, $rules, $turn, $prev);
+        $fx = start_turn($t, $players, $objects, $rules, $turn, $prev, $seat);
+        if ($fx && isset($fx['regen'])) $stats['regen'] = ($stats['regen'] ?? 0) + $fx['regen']['heal'];
         if ($fx) {
             foreach ($fx['crates'] ?? [] as $c) {
                 $stats['drops']++;

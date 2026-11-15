@@ -69,6 +69,9 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   another tank or wreck, a building or a crate. Distance is measured along the ground, so climbing uses more of
   it. Driving doesn't end your turn and doesn't need a target: use it to get out of a fire, out of a crater, or
   off the spot an enemy has ranged. Esc (or the AIM pad) goes back to aiming. Everyone sees the tank drive.
+- **Heal over time:** every living tank repairs 3 hp (`regen_per_turn`) at the start of its own turn, up to 100,
+  after that turn's damage (fire, falls), so a tank destroyed at the start of its turn isn't healed. Repairs stop
+  at sudden death (turn 30).
 - **Maps:** every match is played on one of these (each has its own look, physics and rule):
 
   | Map | Rule | Gravity | Wind |
@@ -165,6 +168,17 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   in progress finish under the rules they started with (no crates); they do get driving, at the site's setting.
   If your host caches PHP (OPcache), the new files may take a few seconds to be picked up.
 
+## Admin: "restarting" the game
+There is no game server process to restart: every request runs PHP and reads the database. When something is stuck,
+an admin opens **`admin.php`** (or the **Admin** link in the lobby's top bar). List admin usernames in
+`includes/config.php`: `'admins' => ['yourname'],`. The page shows running matches (marked *stuck?* after 5 minutes
+with no move, or a minute with nobody online), the queue, open rooms and the latest logged problems, and can:
+- **End** one match, or **End all matches**: no result; ratings, wins and matches played don't change. Players on
+  the battle page see "Battle ended by the site admin".
+- **Clear the queue**, **Close open rooms**.
+- **Reload code**: clears PHP's OPcache, so newly uploaded files are used straight away.
+- **Restart everything**: all of the above at once.
+
 ## When something goes wrong
 - **The battle page never freezes.** If the connection drops, a *Connection lost. Reconnecting…* bar appears
   with a **Reload** button, and the page keeps retrying by itself. If something breaks while a shot is being
@@ -186,6 +200,8 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
 | `crate_max` | 1 | most crates on the field at once |
 | `crate_radius` | 15 | crates land anywhere inside a circle this wide (metres) around the point between the tanks |
 | `move_per_turn` | 10 | metres a tank may drive on its turn before firing; 0 turns driving off |
+| `regen_per_turn` | 3 | hp a tank repairs at the start of its own turn (up to 100, until sudden death); 0 turns it off |
+| `admins` | none | usernames that can open `admin.php`, e.g. `['david']` |
 | `alias_cooldown_hours` | 24 | how often a player may change their shown name |
 | `blocked_names` | none | extra words to block in usernames and names |
 | `allow_register` | true | set false to close sign-ups |
@@ -209,6 +225,7 @@ api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
 api/move.php         → drive before you fire (server plans the route; doesn't end the turn)
+admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart")
 api/forfeit.php      → leave a match
 includes/            → config, database, game engine, map recipes, power-ups (items.php), private rooms
                        (rooms.php), computer players (ai.php), matchmaking (web access blocked)

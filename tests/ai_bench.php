@@ -10,7 +10,7 @@
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit;
 define('ART3D', true);
-$GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10];
+$GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10, 'regen_per_turn' => 3];
 $drive = !in_array('--no-drive', $argv, true); $argv = array_values(array_diff($argv, ['--no-drive']));
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
 require dirname(__DIR__) . '/includes/ai.php';
@@ -71,7 +71,7 @@ foreach (array_keys(AI_LEVELS) as $level) {
             $prev = $seat;
             do { $seat = ($seat + 1) % $np; } while (!$players[$seat]['alive']);
             $turn++; next_wind($wa, $ws, $rules, $turn - 1, $turn); FX::$e['double'] = null;
-            start_turn($t, $players, $objects, $rules, $turn, $prev);
+            start_turn($t, $players, $objects, $rules, $turn, $prev, $seat);
             foreach ($players as $s => &$p) if ($p['alive'] && $p['hp'] <= 0) $p['alive'] = false;
             unset($p);
         }

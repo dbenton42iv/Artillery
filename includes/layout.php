@@ -15,7 +15,7 @@ function page_head(string $title, string $bodyClass = ''): void
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=6">
+<link rel="stylesheet" href="assets/app.css?v=7">
 </head>
 <body class="<?= h($bodyClass) ?>">
 <?php }
@@ -33,6 +33,7 @@ function topbar(array $u): void
   <a class="brand" href="lobby.php">ARTILLERY <span>3D</span></a>
   <nav>
     <span class="me"><b style="color:<?= h($r['color']) ?>"><?= h($r['name']) ?></b> <a href="account.php" class="me-name" title="Change your name"><?= h($u['name']) ?></a> · <?= (int)$u['rating'] ?></span>
+    <?php if (function_exists('is_admin') ? is_admin($u) : in_array(strtolower((string)$u['username']), array_map('strtolower', (array)cfg('admins', [])), true)): ?><a href="admin.php" class="admin-link">Admin</a> · <?php endif; ?>
     <form method="post" action="logout.php" class="inline"><?= csrf_field() ?><button class="link">Log out</button></form>
   </nav>
 </header>

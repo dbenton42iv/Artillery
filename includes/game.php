@@ -178,6 +178,7 @@ function create_match(array $group, int $mode, ?string $mapId = null, array $opt
     $rules['items'] = $gm === 'ranked' ? 'safe' : (in_array($opt['items'] ?? 'all', ['all', 'safe', 'off'], true) ? ($opt['items'] ?? 'all') : 'all');
     $rules['turn_seconds'] = (int)($opt['turn_seconds'] ?? cfg('turn_seconds', 40));
     $rules['move'] = (float)($opt['move'] ?? cfg('move_per_turn', 10));   // metres a tank may drive each turn (0 = no driving)
+    $rules['regen'] = (int)($opt['regen'] ?? cfg('regen_per_turn', 3));   // hp a tank repairs at the start of its turn (0 = off)
     if (!empty($opt['bots'])) {                         // which seats the AI drives, and how well it aims
         $rules['bots'] = [];
         foreach ($group as $seat => $g) if (isset($opt['bots'][(int)$g['user_id']])) $rules['bots'][$seat] = $opt['bots'][(int)$g['user_id']];
@@ -331,7 +332,7 @@ function advance_or_finish(array &$m, array &$players, Terrain $t): ?int
     $m['turn_deadline'] = time() + turn_secs($m['rules']);
 
     $before = json_encode($m['objects']);
-    $fx = start_turn($t, $players, $m['objects'], $m['rules'], $new, $prev);
+    $fx = start_turn($t, $players, $m['objects'], $m['rules'], $new, $prev, $s);
     if ($fx === null) return null;
     if (json_encode($m['objects']) !== $before) $m['objects_dirty'] = true;
     $m['terrain_dirty'] = true;
@@ -639,7 +640,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $out = [
         'match' => ['id' => (int)$m['id'], 'status' => $m['status'], 'turn' => (int)$m['turn_no'], 'seat' => (int)$m['current_seat'],
                     'time_left' => max(0, (int)$m['turn_deadline'] - $now), 'turn_seconds' => turn_secs(match_rules($m)),
-                    'game_mode' => $m['game_mode'] ?? 'ranked',
+                    'game_mode' => $m['game_mode'] ?? 'ranked', 'ended' => match_rules($m)['ended'] ?? null,
                     'wind_ang' => (float)$m['wind_ang'], 'wind_spd' => (float)$m['wind_spd'],
                     'last_event_id' => (int)$m['last_event_id'], 'winner_user_id' => $m['winner_user_id'] === null ? null : (int)$m['winner_user_id']],
         'players' => $players,
@@ -649,7 +650,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $out['effects'] = FX::pub($mySeat);
     $rules = match_rules($m);
     $out['map'] = ['id' => $rules['map'], 'name' => MAPS[$rules['map']]['name'] ?? $rules['map'], 'blurb' => MAPS[$rules['map']]['blurb'] ?? '',
-                   'rules' => $rules, 'move' => move_budget($rules), 'sudden_turn' => SD_TURN, 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
+                   'rules' => $rules, 'move' => move_budget($rules), 'regen' => regen_rate($rules), 'sudden_turn' => SD_TURN, 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
     if ($withTerrain) {
         $out['terrain'] = base64_encode($m['terrain']);
         $out['objects'] = array_map(function ($o) {          // sealed crates: never send what's inside

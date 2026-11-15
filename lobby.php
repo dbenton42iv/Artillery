@@ -162,7 +162,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
           <tr>
             <td><?= (int)$r['mode'] === 2 ? '1 v 1' : (int)$r['mode'] . ' tanks' ?><?= $rated ? '' : ' <span class="muted small">' . h(GAME_MODES[$r['game_mode']] ?? '') . '</span>' ?></td>
             <td><?= h(MAPS[$r['map_id'] ?? 'highlands']['name'] ?? 'Highlands') ?></td>
-            <td><?= $ord((int)$r['placement']) ?></td>
+            <td><?= $r['placement'] === null ? '<span class="muted small">ended</span>' : $ord((int)$r['placement']) ?></td>
             <td class="r"><?= (int)$r['kills'] ?></td><td class="r"><?= (int)$r['damage_dealt'] ?></td>
             <?php if ($rated): ?><td class="r <?= $d >= 0 ? 'up' : 'down' ?>"><?= $d >= 0 ? '+' : '' ?><?= $d ?></td><?php else: ?><td class="r muted">–</td><?php endif; ?>
           </tr>
