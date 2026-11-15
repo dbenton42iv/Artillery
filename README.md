@@ -46,6 +46,10 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   - **Private:** unrated, by invite code. The host opens a room, sends friends the 6-letter code, picks the
     map (or Random), the power-ups (all, ranked-safe only, or off) and the shot clock (20–60 s), and starts
     once 2–4 players are in. If the host leaves, the room closes.
+    **Invite friends** sends a link (`join.php?code=…`) through the phone's share sheet, or copies it on a
+    computer. Tapping it joins the room; a friend who isn't logged in, or has no account yet, logs in or signs
+    up first (the login page says who invited them) and then lands in the room. The room stays open for 3
+    minutes without the host, so switching to Messages to send the link doesn't close it.
   - **vs AI:** practise against 1–3 computer players. Pick a random ranked map or any map, a skill
     (Rookie, Veteran or Ace) and the power-ups. Played to ranked rules by default (fair crates, ranked-safe
     power-ups) but always unrated: ratings, wins, matches played and the leaderboard never change.
@@ -176,6 +180,7 @@ practice.html        → offline game (no account needed)
 install.php          → one-time installer (delete after use)
 api/queue.php        → join/leave the ranked or casual queue, matchmaking status
 api/room.php         → private rooms: create, join by code, settings, start, leave
+join.php             → invite links: joins the room, through login or sign-up if needed
 api/item.php         → use the power-up you hold
 api/ai.php           → start a battle against computer players
 api/match.php        → match state and new events (polled)

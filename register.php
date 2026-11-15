@@ -32,6 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 page_head('Create account', 'auth'); ?>
 <main class="auth-card panel">
   <h1 class="logo">ARTILLERY <span>3D</span></h1>
+  <?php if (!empty($_SESSION['invite'])): ?><p class="ok">Create your account, then log in to join your friend's battle.</p><?php endif; ?>
   <p class="muted">Every new commander starts at a rating of 1000 (Corporal). You log in with your username; you can pick a different name to show other players later.</p>
   <?php foreach ($errors as $e): ?><p class="err"><?= h($e) ?></p><?php endforeach; ?>
   <form method="post" class="form">

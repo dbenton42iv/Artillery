@@ -85,6 +85,9 @@
     if (!r) return;
     if (tab !== 'private') setTab('private');
     $('#roomCodeShow').textContent = r.code;
+    const link = new URL('join.php?code=' + r.code, location.href).href;
+    if ($('#roomLink').value !== link) $('#roomLink').value = link;
+    $('#roomInvite').hidden = r.members.length >= r.max;
     const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     let li = r.members.map(m => `<li><span style="color:${m.rank.color}">${esc(m.name)}${m.me ? ' <small>YOU</small>' : ''}</span><small>${m.host ? 'HOST' : esc(m.rank.name)}</small></li>`);
     for (let k = r.members.length; k < r.max; k++) li.push('<li class="empty">Waiting for a player…</li>');
@@ -103,7 +106,7 @@
     }
     $('#roomStart').hidden = !r.host;
     $('#roomStart').disabled = r.members.length < 2;
-    $('#roomHint').textContent = r.host ? (r.members.length < 2 ? 'Send the code to your friends. You can start when at least one has joined.' : `Start when everyone is in (${r.members.length} of ${r.max}).`)
+    $('#roomHint').textContent = r.host ? (r.members.length < 2 ? 'Tap Invite friends to send them the link (or give them the code). You can start when at least one has joined.' : `Start when everyone is in (${r.members.length} of ${r.max}).`)
       : 'Waiting for the host to start the battle.';
   }
   async function roomTick() {
@@ -141,6 +144,18 @@
     if (s.error) { showErr(s.error); $('#roomStart').disabled = false; }
   };
   $('#roomLeave').onclick = async () => { await roomApi('leave', {}); stopRoom(); };
+  /* invite friends: the phone's share sheet where there is one, otherwise copy the link */
+  $('#roomInvite').onclick = async () => {
+    const url = $('#roomLink').value, code = $('#roomCodeShow').textContent;
+    const text = `Join my Artillery 3D battle! Tap the link, or enter code ${code} under Private in the lobby.`;
+    const say = t => { $('#inviteMsg').textContent = t; $('#inviteMsg').hidden = false; };
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Artillery 3D battle', text, url }); say('Invite sent. The room stays open while you wait for them.'); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }            // closed the share sheet
+    }
+    try { await navigator.clipboard.writeText(url); say('Invite link copied. Paste it into a message to your friends.'); }
+    catch (e) { $('#roomLink').select(); say('Copy the link above and send it to your friends.'); }
+  };
   $('#roomCopy').onclick = () => { try { navigator.clipboard.writeText($('#roomCodeShow').textContent); $('#roomCopy').textContent = 'Copied'; setTimeout(() => $('#roomCopy').textContent = 'Copy', 1500); } catch (e) {} };
 
   /* ---------- vs AI ---------- */

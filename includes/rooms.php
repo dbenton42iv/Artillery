@@ -6,8 +6,25 @@ defined('ART3D') || exit;
  * The host picks the map, power-ups and shot clock, and starts the battle once 2–4 players are in.
  * Private matches are unrated. Rooms live only while their members' lobby pages keep polling:
  * a member who stops for ROOM_STALE seconds is dropped, and the room closes if the host goes.
+ * That is 3 minutes, so the host can switch to Messages or WhatsApp to send the invite link (phones pause
+ * a page in the background) without the room closing behind them.
+ *
+ * Invite links: join.php?code=ABC123. A friend who isn't logged in logs in or signs up first, then lands in the room.
  */
-const ROOM_STALE = 25, ROOM_MAX = 4, ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const ROOM_STALE = 180, ROOM_MAX = 4, ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/** Upper-case, letters and digits only: "abc-123" → "ABC123". */
+function room_clean_code(string $code): string { return substr(strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $code)), 0, 6); }
+
+/** Who's inviting, for the login page: the host's shown name and how many are in, or null if the room isn't open. */
+function room_invite_info(string $code): ?array
+{
+    $st = db()->prepare('SELECT u.id, u.username, u.alias, (SELECT COUNT(*) FROM ' . T('room_members') . ' rm WHERE rm.room_id = r.id) n
+        FROM ' . T('rooms') . ' r JOIN ' . T('users') . " u ON u.id = r.host_id WHERE r.code = ? AND r.status = 'open'");
+    $st->execute([room_clean_code($code)]);
+    $r = $st->fetch();
+    return $r ? ['host' => display_name($r), 'players' => (int)$r['n']] : null;
+}
 const ROOM_CLOCKS = [20, 30, 40, 60];
 
 function room_settings(array $in): array
@@ -71,7 +88,7 @@ function room_create(int $uid, array $in): array
 
 function room_join(int $uid, string $code): array
 {
-    $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $code));
+    $code = room_clean_code($code);
     $pdo = db();
     $pdo->beginTransaction();
     try {
@@ -160,7 +177,11 @@ function room_status(int $uid): array
     if ($r['status'] !== 'open') { db()->prepare('DELETE FROM ' . T('room_members') . ' WHERE user_id = ?')->execute([$uid]); return ['room' => null, 'closed' => true]; }
     db()->prepare('UPDATE ' . T('room_members') . ' SET last_poll = ? WHERE user_id = ?')->execute([time(), $uid]);
     room_prune((int)$r['id']);
-    if (!($r = room_of($uid))) return ['room' => null, 'closed' => true];
+    $r = room_of($uid);
+    if (!$r || $r['status'] !== 'open') {                 // this poll found the host gone and closed the room
+        db()->prepare('DELETE FROM ' . T('room_members') . ' WHERE user_id = ?')->execute([$uid]);
+        return ['room' => null, 'closed' => true];
+    }
     $st = db()->prepare('SELECT u.id, u.username, u.alias, u.rating FROM ' . T('room_members') . ' rm JOIN ' . T('users') . ' u ON u.id = rm.user_id WHERE rm.room_id = ? ORDER BY rm.joined_at');
     $st->execute([$r['id']]);
     $members = array_map(fn($m) => ['name' => display_name($m), 'host' => (int)$m['id'] === (int)$r['host_id'], 'me' => (int)$m['id'] === $uid,

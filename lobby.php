@@ -80,6 +80,11 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
         </div>
         <div id="roomIn" hidden>
           <div class="room-code"><span class="muted small">INVITE CODE</span><b id="roomCodeShow"></b><button class="link" id="roomCopy" type="button">Copy</button></div>
+          <div class="invite">
+            <button class="btn" id="roomInvite" type="button">Invite friends</button>
+            <input id="roomLink" readonly aria-label="Invite link" onclick="this.select()">
+          </div>
+          <p class="muted small" id="inviteMsg" hidden></p>
           <ul class="room-members" id="roomMembers"></ul>
           <div class="room-set" id="roomSetIn"></div>
           <p class="muted small" id="roomHint"></p>
@@ -118,7 +123,10 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
           <button class="btn ghost" id="cancelBtn">Cancel</button>
         </div>
       </div>
-      <p class="err" id="mmErr" hidden></p>
+      <p class="err" id="mmErr" <?= isset($_GET['invite_error']) ? '' : 'hidden' ?>><?php
+        $ie = (string)($_GET['invite_error'] ?? '');
+        echo $ie === '' ? '' : h(['no_room' => "That invite has expired: the room was closed or the battle already started.",
+                                  'room_full' => 'That room is already full (4 players).'][$ie] ?? "Couldn't join that room."); ?></p>
     </div>
 
     <div class="panel card">
@@ -165,5 +173,5 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
     </div>
   </section>
 </main>
-<script src="assets/lobby.js?v=3"></script>
+<script src="assets/lobby.js?v=4"></script>
 <?php page_foot();

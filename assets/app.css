@@ -95,6 +95,9 @@ main.narrow{max-width:560px;margin:24px auto;padding:0 16px}
 .join-row .btn{padding:11px 18px}
 .room-code{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 .room-code b{font:400 34px 'Black Ops One';letter-spacing:.18em;color:var(--accent)}
+.invite{display:flex;gap:8px;margin-top:10px;align-items:stretch}
+.invite .btn{flex:none;padding:10px 16px}
+.invite input{flex:1;min-width:0;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:8px 10px;font:600 14px Rajdhani}
 .room-members{list-style:none;padding:0;margin:10px 0}
 .room-members li{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin:5px 0;font-weight:700}
 .room-members li.empty{border-style:dashed;color:var(--dim);font-weight:500}
