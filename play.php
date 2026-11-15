@@ -22,7 +22,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/game.css?v=3">
+<link rel="stylesheet" href="assets/game.css?v=4">
 </head>
 <body>
 <div id="game" data-match="<?= $mid ?>" data-csrf="<?= h(csrf_token()) ?>" data-user="<?= (int)$u['id'] ?>"></div>
@@ -55,6 +55,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 </div>
 
 <div id="banner"></div>
+<div id="netbar" class="panel" hidden role="status"><span id="netMsg"></span><button id="netReload" type="button">Reload</button></div>
 <div id="mapIntro" hidden></div>
 <div id="hint" class="panel" hidden><span>Turn your phone sideways to see more of the battlefield.</span><button id="hintOk" type="button">OK</button></div>
 
@@ -73,6 +74,6 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 
 <script src="assets/vendor/three.min.js"></script>
 <script src="assets/terrain.js?v=3"></script>
-<script src="assets/game.js?v=7"></script>
+<script src="assets/game.js?v=8"></script>
 </body>
 </html>

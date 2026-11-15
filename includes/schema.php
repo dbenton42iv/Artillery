@@ -132,5 +132,15 @@ function schema_sql(string $p): array
   KEY ix_item (item, action),
   KEY ix_match (match_id)
 ) $e",
+"CREATE TABLE IF NOT EXISTS `{$p}errors` (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  source ENUM('server','client') NOT NULL,
+  user_id INT UNSIGNED NULL,
+  match_id INT UNSIGNED NULL,
+  url VARCHAR(255) NOT NULL DEFAULT '',
+  message TEXT NOT NULL,
+  KEY ix_time (created_at)
+) $e",
     ];
 }

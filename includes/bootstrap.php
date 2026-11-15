@@ -101,13 +101,40 @@ function require_login(): array
 }
 
 /* ---------- JSON API helpers ---------- */
+/* API replies must be clean JSON: a PHP warning printed into one (hosts often show errors on the page) would
+ * break it, and the game would see a "network error". So API requests never display errors, and anything
+ * printed before the reply is thrown away. */
+define('IS_API', str_contains(str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? ''), '/api/'));
+if (IS_API) { ini_set('display_errors', '0'); ob_start(); }
+
 function json_out($data, int $code = 200): never
 {
+    while (ob_get_level() > 0) ob_end_clean();
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
-    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+    $json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    echo $json === false ? '{"error":"server_error"}' : $json;
     exit;
+}
+
+/**
+ * Record a problem in the errors table (and the PHP error log): server exceptions and fatal errors, and errors
+ * reported by players' browsers (api/clientlog.php). Read them with: SELECT * FROM art_errors ORDER BY id DESC
+ */
+function log_problem(string $source, string $message, ?int $matchId = null): void
+{
+    static $busy = false;
+    error_log("[artillery3d] $source: $message");
+    if ($busy || empty($GLOBALS['ART_CFG'])) return;
+    $busy = true;
+    try {
+        $uid = $_SESSION['uid'] ?? null;
+        $matchId ??= isset($_GET['id']) ? (int)$_GET['id'] : null;
+        db()->prepare('INSERT INTO ' . T('errors') . ' (source, user_id, match_id, url, message) VALUES (?,?,?,?,?)')
+            ->execute([$source, $uid, $matchId, substr((string)($_SERVER['REQUEST_URI'] ?? ''), 0, 250), substr($message, 0, 4000)]);
+    } catch (Throwable $e) { /* the database itself may be the problem */ }
+    $busy = false;
 }
 /** For API endpoints: logged-in user + CSRF check on writes. Releases the session lock early. */
 function api_user(bool $write = false): array
@@ -134,8 +161,17 @@ function rank_for(int $rating): array
 }
 
 set_exception_handler(function (Throwable $e) {
-    error_log('[artillery3d] ' . $e);
-    if (str_contains($_SERVER['SCRIPT_NAME'] ?? '', '/api/')) json_out(['error' => 'server_error'], 500);
+    log_problem('server', (string)$e);
+    if (IS_API) json_out(['error' => 'server_error'], 500);
     http_response_code(500);
     echo '<!doctype html><meta charset="utf-8"><title>Error</title><p style="font-family:sans-serif">Something went wrong. Please try again.</p>';
+});
+
+/* Fatal errors (out of time or memory, a parse error) bypass the exception handler: still log them, and still
+ * answer API calls with JSON so the game can say "server problem" and carry on polling. */
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) return;
+    log_problem('server', "fatal: {$e['message']} in {$e['file']}:{$e['line']}");
+    if (IS_API && !headers_sent()) json_out(['error' => 'server_error'], 500);
 });

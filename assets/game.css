@@ -206,3 +206,8 @@ a.big{display:inline-block;text-decoration:none}
 [data-layout=phone] #forecast .fc{margin:2px 0 0;padding-top:3px;font-size:11px;line-height:1.25}
 [data-layout=phone] .prow .it{margin-left:3px;font-size:11px}
 [data-layout=phone] .crate-l{font-size:13px}
+
+/* ---- connection problems: always visible, always a way out ---- */
+#netbar{position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top));transform:translateX(-50%);z-index:20;display:flex;gap:12px;align-items:center;
+  padding:8px 10px 8px 14px;border-color:rgba(240,180,41,.6);font-weight:700;max-width:calc(100% - 20px)}
+#netbar button{background:var(--accent);color:#1b1f18;border:0;border-radius:8px;padding:8px 14px;font:400 15px 'Black Ops One';cursor:pointer;min-height:40px;flex:none}

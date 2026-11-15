@@ -154,6 +154,16 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   `room_members`, `item_log`) by itself. Matches already in progress finish under the rules they started with (no crates).
   If your host caches PHP (OPcache), the new files may take a few seconds to be picked up.
 
+## When something goes wrong
+- **The battle page never freezes.** If the connection drops, a *Connection lost. Reconnecting…* bar appears
+  with a **Reload** button, and the page keeps retrying by itself. If something breaks while a shot is being
+  replayed, the page reloads itself from the server (the match is always safe there) and play carries on.
+- **The game's server replies are always clean JSON**, even on hosts that print PHP warnings on pages; a fatal
+  error (out of time or memory) still answers with a proper error.
+- **Problems are recorded** in the `art_errors` table: server exceptions and fatal errors, and script errors
+  reported by players' browsers (with the match, the player and the browser). To see the latest:
+  `SELECT created_at, source, match_id, message FROM art_errors ORDER BY id DESC LIMIT 20;`
+
 ## Settings (`includes/config.php`)
 | key | default | meaning |
 |---|---|---|
@@ -183,6 +193,7 @@ api/room.php         → private rooms: create, join by code, settings, start, l
 join.php             → invite links: joins the room, through login or sign-up if needed
 api/item.php         → use the power-up you hold
 api/ai.php           → start a battle against computer players
+api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
 api/forfeit.php      → leave a match

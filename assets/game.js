@@ -631,33 +631,73 @@ function applySnap(d) {
 }
 
 /* ---------- networking ---------- */
+/* ---------- staying alive: connection problems and script errors never leave the page stuck ---------- */
+let netFails = 0;
+function netBar(msg) {
+  const bar = $('#netbar'); if (!bar) return;
+  if (!msg) { bar.hidden = true; return; }
+  $('#netMsg').textContent = msg; bar.hidden = false;
+}
+$('#netReload') && ($('#netReload').onclick = () => location.reload());
+/** Report a script error to the server (errors table), at most a few per page. */
+let reported = 0;
+function reportError(err, where) {
+  if (reported++ > 4) return;
+  try { fetch('api/clientlog.php', { method: 'POST', credentials: 'same-origin', keepalive: true,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: JSON.stringify({ match_id: MID, message: `${where}: ${err && err.message || err}`, stack: String(err && err.stack || '').slice(0, 2500) }) }); } catch (e) {}
+}
+/**
+ * Something broke while showing the battle (most likely replaying an event). The server holds the real state,
+ * so reload the page from it. If that keeps happening, stop and offer a Reload button instead of looping.
+ */
+let recovering = false;
+function recover(err, where) {
+  console.error(err); reportError(err, where);
+  if (recovering) return; recovering = true;
+  let n = 0; try { const k = 'art3d_recover_' + MID, v = JSON.parse(sessionStorage.getItem(k) || '[]').filter(t => Date.now() - t < 60000); v.push(Date.now()); n = v.length; sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) {}
+  if (n <= 2) { netBar('Something went wrong showing the battle. Re-syncing…'); setTimeout(() => location.reload(), 1200); }
+  else netBar('Something keeps going wrong showing this battle. The match is safe on the server.');
+}
+addEventListener('error', e => reportError(e.error || e.message, 'window'));
+addEventListener('unhandledrejection', e => reportError(e.reason, 'promise'));
+
 async function poll() {
   try {
     // shown = the last event this page has finished replaying: computer players wait for it before their next move
     const r = await fetch(`api/match.php?id=${MID}&since=${S.since}&shown=${S.shown}${S.loaded ? '' : '&load=1'}`, { credentials: 'same-origin', cache: 'no-store' });
     if (r.status === 401) { location.href = 'login.php'; return; }
     if (r.status === 404) { location.href = 'lobby.php'; return; }
-    const d = await r.json();
-    if (!S.loaded) init(d);
+    let d;
+    try { d = await r.json(); } catch (e) { throw new Error(`server reply was not readable (HTTP ${r.status})`); }
+    if (d.error) throw new Error('server: ' + d.error);
+    netFails = 0; netBar(null);
+    if (!S.loaded) { try { init(d); } catch (e) { recover(e, 'load'); return; } }
     else {
       for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item')) S.sent = false; }
       S.snap = d;
       if (!S.playing && !S.queue.length) applySnap(d);
     }
-  } catch (e) { console.error(e); $('#loadMsg') && ($('#loadMsg').textContent = 'Connection problem. Retrying…'); }
+  } catch (e) {
+    console.error(e); netFails++;
+    $('#loadMsg') && ($('#loadMsg').textContent = 'Connection problem. Retrying…');
+    if (netFails >= 3) netBar(netFails >= 12 ? "Still can't reach the server. Your match is saved: reload, or come back later." : 'Connection lost. Reconnecting…');
+  }
   finally {
     const done = S.match && S.match.status === 'finished' && !S.queue.length && !S.playing;
-    if (!done) setTimeout(poll, S.sent || (S.match && S.match.seat !== S.me) ? 700 : 1000);
+    const wait = netFails ? Math.min(6000, 1000 * 2 ** Math.min(netFails - 1, 3)) : S.sent || (S.match && S.match.seat !== S.me) ? 700 : 1000;
+    if (!done && !recovering) setTimeout(poll, wait);
   }
 }
 async function post(url, body) {
   const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify(body) });
-  return r.json();
+  try { return await r.json(); } catch (e) { return { error: r.status >= 500 ? 'server_error' : 'network' }; }
 }
 const ERR = { not_your_turn: "It isn't your turn.", stale_turn: 'That turn already ended.', too_late: 'Out of time: your turn was skipped.',
               no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.',
               no_item: "You don't have that power-up.", full_hp: 'Your tank is already at full health.', no_spot: 'No clear spot to move to. Try again later.',
-              mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.' };
+              mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.',
+              server_error: 'The server had a problem. Try again.', network: 'Network error. Try again.' };
 async function useItem() {
   const me = S.P[S.me]; if (!myTurn() || !me || !me.item) return;
   const it = ITEMS[me.item]; if (!it) return;
@@ -1067,14 +1107,17 @@ resize();
 if (DEV.phone) setDrawer(false);
 const clock = new THREE.Clock(); let time = 0;
 function loop() {
+  requestAnimationFrame(loop);                 // first, so an error below can never stop the game
   const dt = Math.min(clock.getDelta(), .05); time += dt;
-  if (S.loaded) {
-    if (!S.playing && S.queue.length) startEvent(S.queue.shift());
-    if (S.playing) updateEvent(dt);
-    handleKeys(dt);
-  }
-  updateEffects(dt); updateCamera(dt); if (S.loaded) updateVisuals(dt, time);
-  renderer.render(scene, camera); requestAnimationFrame(loop);
+  try {
+    if (S.loaded && !recovering) {
+      if (!S.playing && S.queue.length) startEvent(S.queue.shift());
+      if (S.playing) updateEvent(dt);
+      handleKeys(dt);
+    }
+    updateEffects(dt); updateCamera(dt); if (S.loaded) updateVisuals(dt, time);
+    renderer.render(scene, camera);
+  } catch (err) { S.playing = null; recover(err, 'replay'); }
 }
 loop(); poll();
 })();

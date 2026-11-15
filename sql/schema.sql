@@ -136,3 +136,14 @@ CREATE TABLE IF NOT EXISTS `art_item_log` (
   KEY ix_item (item, action),
   KEY ix_match (match_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `art_errors` (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  source ENUM('server','client') NOT NULL,
+  user_id INT UNSIGNED NULL,
+  match_id INT UNSIGNED NULL,
+  url VARCHAR(255) NOT NULL DEFAULT '',
+  message TEXT NOT NULL,
+  KEY ix_time (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
