@@ -38,8 +38,9 @@ const RANKED_POOL_DEFAULT = ['highlands', 'archipelago', 'canyon', 'volcano', 'a
 
 const RANKED_SESSION_GAP = 1800;          // a ranked session ends after 30 minutes without a ranked match
 
-/* Sudden death: from this turn on, wind rises by SD_WIND m/s per turn and every tank loses SD_DRAIN hp per turn. */
-const SD_TURN = 30, SD_WIND = 2.0, SD_DRAIN = 5, SD_WIND_CAP = 40.0;
+/* Sudden death: from this turn on, wind rises by SD_WIND m/s per turn (never above SD_WIND_CAP) and every tank
+ * loses SD_DRAIN hp per turn. */
+const SD_TURN = 30, SD_WIND = 0.5, SD_DRAIN = 5, SD_WIND_CAP = 15.0;
 
 function ranked_pool(): array
 {

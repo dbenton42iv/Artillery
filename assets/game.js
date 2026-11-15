@@ -18,8 +18,27 @@ const LAVA = { hex: 0xff6a1a, css: '#ff8a3a' };
 const WEAPONS = {
   shell:   { name: 'Shell',   key: '1', size: .45 },
   heavy:   { name: 'Heavy',   key: '2', size: .7 },
-  cluster: { name: 'Cluster', key: '3', size: .5 }};
-const WKEYS = Object.keys(WEAPONS);
+  cluster: { name: 'Cluster', key: '3', size: .5 },
+  // power-up shells (fired from the item slot)
+  bunker:     { name: 'Bunker Buster', size: .55 },
+  napalm:     { name: 'Napalm',        size: .5 },
+  earthmover: { name: 'Earthmover',    size: .6 }};
+const WKEYS = ['shell', 'heavy', 'cluster'];
+/* Power-ups: mirrors includes/items.php. kind: instant (free), turn (ends the turn), shell (fire it). */
+const ITEMS = {
+  repair:      { name: 'Repair Kit',     kind: 'instant', icon: '✚', color: '#7bd389', tip: '+30 hp (up to 100)' },
+  shield:      { name: 'Shield Bubble',  kind: 'instant', icon: '◍', color: '#6cc6ff', tip: 'Absorbs the next 40 damage for 2 enemy turns' },
+  weather:     { name: 'Weather Report', kind: 'instant', icon: '☁', color: '#c9d6e8', tip: 'Shows the exact wind for your next 2 turns' },
+  bunker:      { name: 'Bunker Buster',  kind: 'shell',   icon: '⇣', color: '#d9a35b', tip: 'Tunnels 8 m into the ground, then explodes (60 damage, 7 m)' },
+  napalm:      { name: 'Napalm',         kind: 'shell',   icon: '🔥', color: '#ff7a33', tip: 'Leaves a 6 m fire: 8 damage a turn for 3 turns' },
+  earthmover:  { name: 'Earthmover',     kind: 'shell',   icon: '⛰', color: '#b89466', tip: 'Builds a mound (7 m wide, 5 m high) instead of a crater' },
+  double:      { name: 'Double Shot',    kind: 'instant', icon: '⁑', color: '#ffd34d', tip: 'Fire two shells this turn, each with its own aim' },
+  rangefinder: { name: 'Rangefinder',    kind: 'instant', icon: '⌖', color: '#9be7c4', tip: 'Your aim arc shows the whole flight, wind included, for 1 shot' },
+  flare:       { name: 'Flare',          kind: 'instant', icon: '✷', color: '#fff3a0', tip: 'Night maps only' },
+  relocate:    { name: 'Relocate',       kind: 'turn',    icon: '⤧', color: '#e9a0ff', tip: 'Moves your tank 40 m or more to a random spot. Uses your turn' },
+};
+const MODE_NAMES = { ranked: 'RANKED', casual: 'CASUAL', private: 'PRIVATE', ai: 'VS AI' };
+const AI_NAMES = { rookie: 'Rookie', veteran: 'Veteran', ace: 'Ace' };
 const VMAX = 75, STEP = 1 / 120, PATH_EVERY = 4, TIME_SCALE = 1.45, TURRET_H = 2.05, BARREL = 3.2, D2R = Math.PI / 180;
 // set from the match's map when it loads
 let G = 20, N = 160, SIZE = 240, HALF = 120, WATER = 1.6, MS = 1, RULES = null, MAP = 'highlands';
@@ -244,7 +263,11 @@ const winTex = (() => {
   const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
 })();
 function buildObjects(list) {
-  OBJ = list.map(o => {
+  OBJ = [];
+  for (const o of list) { if (o.type === 'crate') { if (o.state === 'live') addCrate(o, false); continue; } OBJ[o.id] = buildBuilding(o); }
+}
+function buildBuilding(o) {
+  {
     const tex = winTex.clone(); tex.needsUpdate = true; tex.repeat.set(Math.max(1, Math.round(o.hw*2/4)), Math.max(1, Math.round(o.h/4)));
     const tint = new THREE.Color().setHSL(.08, .08, .55 + Math.random()*.15);
     const mat = new THREE.MeshStandardMaterial({ map: tex, color: tint, roughness: .9 });
@@ -258,7 +281,7 @@ function buildObjects(list) {
     const O = { ...o, group: g, mat, tint, gone: false };
     if (o.hp <= 0) { g.visible = false; O.gone = true; } else shade(O);
     return O;
-  });
+  }
 }
 function shade(O) { const k = O.hp / O.max; O.mat.color.copy(O.tint).multiplyScalar(.45 + .55*k); O.group.rotation.z = (1 - k) * .03; }
 function damageObject(r) {
@@ -272,6 +295,116 @@ function damageObject(r) {
   spawnDebris(pos, Math.max(O.hw, O.hd)*2, 0x7a746a);
   AT.raise(VT, O.x, O.z, Math.max(O.hw, O.hd)*1.6, Math.min(3, O.h*.18), 2); updateTerrainMesh();
   banner('Building down!', 1200);
+}
+
+/* =====================================================================
+ * Supply crates, shields and fire zones (phase 2)
+ * ===================================================================== */
+const CRATES = new Map();                 // id -> { ...crate, group, label, drop }
+/* Crates are sealed: the server decides what's inside only when one is claimed, so every crate looks the same. */
+let crateTex = null;
+function crateTexture() {
+  if (crateTex) return crateTex;
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = '#6b4f2c'; g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = '#3e2c17'; g.lineWidth = 10; g.strokeRect(5, 5, 118, 118);
+  g.lineWidth = 7; g.beginPath(); g.moveTo(12, 12); g.lineTo(116, 116); g.moveTo(116, 12); g.lineTo(12, 116); g.stroke();
+  g.fillStyle = '#f0b429'; g.beginPath(); g.arc(64, 64, 30, 0, Math.PI*2); g.fill();
+  g.fillStyle = '#1b1f18'; g.font = 'bold 44px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('?', 64, 67);
+  return crateTex = new THREE.CanvasTexture(c);
+}
+const crateRest = c => Math.max(heightAt(c.x, c.z), WATER === null ? -100 : WATER);
+function addCrate(c, dropping) {
+  if (CRATES.has(c.id)) return;
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), new THREE.MeshStandardMaterial({ map: crateTexture(), roughness: .8 }));
+  box.position.y = .8; box.castShadow = true; box.receiveShadow = true; g.add(box);
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, 3.2, 5), new THREE.MeshBasicMaterial({ color: 0xf0b429 }));
+  beacon.position.y = 3.2; g.add(beacon);
+  const chute = new THREE.Group();
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(3, 12, 6, 0, Math.PI*2, 0, Math.PI/2.4),
+    new THREE.MeshStandardMaterial({ color: 0xe8e2d0, side: THREE.DoubleSide, roughness: .9, transparent: true, opacity: .95 }));
+  canopy.position.y = 6.2; chute.add(canopy);
+  const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([-2.4, 2.4].flatMap(x => [-2.4, 2.4].flatMap(z => [new THREE.Vector3(0, 1.6, 0), new THREE.Vector3(x*.8, 5.6, z*.8)]))),
+    new THREE.LineBasicMaterial({ color: 0x8a8576 }));
+  chute.add(lines); g.add(chute); chute.visible = dropping;
+  const y = c.y ?? crateRest(c);
+  g.position.set(c.x, dropping ? y + 45 : y, c.z); scene.add(g);
+  const label = document.createElement('div'); label.className = 'tl crate-l';
+  label.innerHTML = '<div style="color:#f0b429">Supply crate</div>';
+  $('#labels').appendChild(label);
+  CRATES.set(c.id, { ...c, y, group: g, chute, label, drop: dropping ? { t: 0, from: y + 45 } : null, bob: Math.random()*6 });
+}
+function removeCrate(id, how, by, item) {
+  const C = CRATES.get(id); if (!C) return;
+  const pos = C.group.position.clone().setY(C.group.position.y + 1);
+  if (how === 'claimed') {                                   // opened: now everyone sees what was inside
+    const P = S.P[by], it = ITEMS[item];
+    popup(`+${it ? it.name : item}`, pos.clone().setY(pos.y + 3), P ? P.color.css : '#fff'); noise(.25, 3000, .25, 1.2);
+    if (P) { P.item = item; banner(by === S.me ? `You got ${it ? it.name : item}!` : `${P.name} got ${it ? it.name : item}`, 1600); }
+  } else { spawnDebris(pos, 3, 0x6b4f2c, 6); popup('Crate lost', pos.clone().setY(pos.y + 3), '#d8d2c4'); }
+  scene.remove(C.group); C.label.remove(); CRATES.delete(id);
+}
+function regroundCrates() { for (const C of CRATES.values()) if (!C.drop) { C.y = crateRest(C); C.group.position.y = C.y; } }
+function updateCrates(dt, time) {
+  for (const C of CRATES.values()) {
+    if (C.drop) {
+      C.drop.t += dt; const k = Math.min(1, C.drop.t / 2.2);
+      C.group.position.y = C.drop.from + (C.y - C.drop.from) * k; C.group.rotation.y += dt * .6; C.chute.rotation.z = Math.sin(time*2.3) * .08;
+      if (k >= 1) { C.drop = null; C.chute.visible = false; spawnSmoke(C.group.position.clone(), 2.5, 1.2, 0x9a8f78, 1); }
+    } else if (C.y <= (WATER ?? -100) + .01) C.group.position.y = C.y - .35 + Math.sin(time*1.6 + C.bob) * .12;     // floating
+    const s = project(v3.set(C.group.position.x, C.group.position.y + 4, C.group.position.z));
+    if (!s.vis || cam.dist > 150 * MS) C.label.style.display = 'none';
+    else { C.label.style.display = ''; C.label.style.left = s.x + 'px'; C.label.style.top = s.y + 'px'; }
+  }
+}
+
+const shieldMeshes = new Map();           // seat -> mesh
+const shieldMat = new THREE.MeshStandardMaterial({ color: 0x6cc6ff, emissive: 0x2a78c8, emissiveIntensity: .5, transparent: true, opacity: .22, depthWrite: false, roughness: .2, side: THREE.DoubleSide });
+function setShield(seat, on) {
+  const has = shieldMeshes.get(seat);
+  if (on && !has) { const m = new THREE.Mesh(new THREE.SphereGeometry(3.4, 24, 14), shieldMat.clone()); scene.add(m); shieldMeshes.set(seat, m); }
+  if (!on && has) { scene.remove(has); has.geometry.dispose(); has.material.dispose(); shieldMeshes.delete(seat); }
+}
+function shieldHit(seat) { const m = shieldMeshes.get(seat); if (m) { m.material.opacity = .7; m.userData.flash = 1; } }
+const fireZones = new Map();              // id -> { group, flames }
+function addFire(f) {
+  if (fireZones.has(f.id)) return;
+  const g = new THREE.Group(); const y = heightAt(f.x, f.z);
+  const glow = new THREE.Mesh(new THREE.CircleGeometry(f.r, 28), new THREE.MeshBasicMaterial({ color: 0xff5a14, transparent: true, opacity: .32, depthWrite: false }));
+  glow.rotation.x = -Math.PI/2; glow.position.y = .25; g.add(glow);
+  const flames = [];
+  for (let k = 0; k < (DEV.phone ? 7 : 14); k++) {
+    const a = Math.random()*Math.PI*2, r = Math.sqrt(Math.random()) * f.r * .85;
+    const fl = new THREE.Mesh(new THREE.ConeGeometry(.45, 1.8, 6), new THREE.MeshBasicMaterial({ color: k % 2 ? 0xff9a2a : 0xffd04a, transparent: true, opacity: .85, depthWrite: false }));
+    fl.position.set(Math.cos(a)*r, 0, Math.sin(a)*r); fl.userData.ph = Math.random()*6; g.add(fl); flames.push(fl);
+  }
+  const light = new THREE.PointLight(0xff7a2a, 1.4, f.r * 4, 2); light.position.y = 2; g.add(light);
+  g.position.set(f.x, y, f.z); scene.add(g);
+  fireZones.set(f.id, { ...f, group: g, flames, light });
+}
+function removeFire(id) { const F = fireZones.get(id); if (!F) return; scene.remove(F.group); fireZones.delete(id); }
+function updateFx(dt, time) {
+  for (const [seat, m] of shieldMeshes) {
+    const P = S.P[seat]; if (!P) continue;
+    m.position.set(P.x, P.y + 1.4, P.z); m.visible = !P.dead;
+    if (m.userData.flash) { m.userData.flash = Math.max(0, m.userData.flash - dt*2); m.material.opacity = .22 + .5*m.userData.flash; }
+    else m.material.opacity = .18 + Math.sin(time*3)*.05;
+  }
+  for (const F of fireZones.values()) {
+    F.group.position.y = heightAt(F.x, F.z);
+    for (const fl of F.flames) { const k = .6 + .5*Math.abs(Math.sin(time*5 + fl.userData.ph)); fl.scale.set(k, k*1.3, k); fl.position.y = .9*k; fl.position.y += 0; }
+    F.light.intensity = 1.2 + Math.sin(time*9)*.3;
+  }
+}
+/** Bring shields and fires in line with the server's list (between replays). */
+function syncFx() {
+  const fx = S.fx || {};
+  const sh = fx.shields || {};
+  for (const P of S.P) setShield(P.seat, !!sh[P.seat] && !P.dead);
+  const ids = new Set((fx.fires || []).map(f => f.id));
+  for (const id of [...fireZones.keys()]) if (!ids.has(id)) removeFire(id);
+  for (const f of fx.fires || []) addFire(f);
 }
 
 /* ---------- volcano vent ---------- */
@@ -419,7 +552,7 @@ canvas.addEventListener('wheel', e => { e.preventDefault(); cam.tDist = clamp(ca
 const S = {
   loaded: false, me: -1, P: [], match: null, map: null, since: 0, queue: [], playing: null, snap: null,
   aim: { yaw: 0, elev: 45, power: 55, weapon: 'shell' }, sent: false, deadline: 0, wind: { ang: 0, spd: 0 },
-  endShown: false, stayed: false, lastTurnSeen: -1,
+  endShown: false, stayed: false, lastTurnSeen: -1, shown: 0, showing: 0, fx: { shields: {}, fires: [], double: null, range: [] },
 };
 const myTurn = () => S.match && S.match.status === 'active' && S.match.seat === S.me && !S.playing && !S.queue.length && !S.sent;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -436,7 +569,7 @@ function init(d) {
   initTerrain(decodeTerrain(d.terrain));
   buildObjects(d.objects || []);
   buildVent();
-  S.me = d.me; S.since = d.match.last_event_id;
+  S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
   S.P = d.players.map(p => {
     const c = COLORS[p.seat], label = document.createElement('div');
     label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div><div class="bar"><i style="background:${c.css}"></i></div>`;
@@ -474,17 +607,24 @@ function applySnap(d) {
   S.wind = { ang: d.match.wind_ang, spd: d.match.wind_spd };
   for (const p of d.players) {
     const P = S.P[p.seat]; if (!P) continue;
-    Object.assign(P, { hp: p.hp, ammo: p.ammo, online: p.online, strikes: p.strikes, placement: p.placement, damage: p.damage,
-                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, y: p.y });
+    Object.assign(P, { bot: p.bot, hp: p.hp, ammo: p.ammo, item: p.item, online: p.online, strikes: p.strikes, placement: p.placement, damage: p.damage,
+                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z });
     if (!p.alive && !P.dead) setDead(P, false);
     P.alive = p.alive;
   }
+  S.fx = d.effects || S.fx; syncFx();
   const me = S.P[S.me];
   if (me && me.ammo && me.ammo[S.aim.weapon] === 0) S.aim.weapon = 'shell';
+  if (me && ITEMS[S.aim.weapon] && me.item !== S.aim.weapon) S.aim.weapon = 'shell';
   if (S.match.status === 'active' && S.lastTurnSeen !== S.match.turn) {
     S.lastTurnSeen = S.match.turn;
     const cur = S.P[S.match.seat];
-    if (S.match.seat === S.me) { banner('Your turn!'); camBehind({ ...me, yaw: S.aim.yaw }); setDrawer(true); }
+    if (S.match.seat === S.me) {
+      banner('Your turn!'); camBehind({ ...me, yaw: S.aim.yaw }); setDrawer(true);
+      // show where your own last shot went (to adjust from it), not the opponent's that just landed
+      for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q.seat === S.me);
+      envTrails.forEach(t => t.line.visible = false);
+    }
     else if (cur) { banner(`${cur.name}'s turn`); camBehind(cur); }
   }
   syncUI();
@@ -493,13 +633,14 @@ function applySnap(d) {
 /* ---------- networking ---------- */
 async function poll() {
   try {
-    const r = await fetch(`api/match.php?id=${MID}&since=${S.since}${S.loaded ? '' : '&load=1'}`, { credentials: 'same-origin', cache: 'no-store' });
+    // shown = the last event this page has finished replaying: computer players wait for it before their next move
+    const r = await fetch(`api/match.php?id=${MID}&since=${S.since}&shown=${S.shown}${S.loaded ? '' : '&load=1'}`, { credentials: 'same-origin', cache: 'no-store' });
     if (r.status === 401) { location.href = 'login.php'; return; }
     if (r.status === 404) { location.href = 'lobby.php'; return; }
     const d = await r.json();
     if (!S.loaded) init(d);
     else {
-      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && e.type === 'shot') S.sent = false; }
+      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item')) S.sent = false; }
       S.snap = d;
       if (!S.playing && !S.queue.length) applySnap(d);
     }
@@ -514,7 +655,20 @@ async function post(url, body) {
   return r.json();
 }
 const ERR = { not_your_turn: "It isn't your turn.", stale_turn: 'That turn already ended.', too_late: 'Out of time: your turn was skipped.',
-              no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.' };
+              no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.',
+              no_item: "You don't have that power-up.", full_hp: 'Your tank is already at full health.', no_spot: 'No clear spot to move to. Try again later.',
+              mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.' };
+async function useItem() {
+  const me = S.P[S.me]; if (!myTurn() || !me || !me.item) return;
+  const it = ITEMS[me.item]; if (!it) return;
+  if (it.kind === 'shell') { S.aim.weapon = me.item; syncUI(); return; }
+  if (me.item === 'relocate' && !confirm('Relocate? Your tank moves to a random spot at least 40 m away, and this uses your turn.')) return;
+  ac(); S.sent = true; syncUI();
+  try {
+    const res = await post('api/item.php', { match_id: MID, turn_no: S.match.turn });
+    if (res.error) { S.sent = false; banner(ERR[res.error] || 'Could not use that', 2200); syncUI(); }
+  } catch (e) { S.sent = false; banner('Network error. Try again.', 2000); syncUI(); }
+}
 async function fire() {
   if (!myTurn()) return;
   ac();
@@ -531,16 +685,19 @@ const prepProjs = list => (list || []).map(pr => {
   return { ...pr, ts, seg: 0, pushed: 0, started: false, done: false, mesh: null, trail: null };
 });
 function startEvent(e) {
-  const P = S.P[e.seat];
+  const P = S.P[e.seat]; S.showing = e.id;
   if (e.type === 'skip') { banner(`${P.name} ran out of time (${e.data.strikes} strike${e.data.strikes > 1 ? 's' : ''})`, 1800); S.playing = { kind: 'msg', t: 0, dur: 1.6 }; return; }
   if (e.type === 'forfeit') {
     banner(e.data.reason === 'quit' ? `${P.name} left the battle` : `${P.name} was removed for inactivity`, 2000);
     P.hp = 0; setDead(P, true); syncUI(); S.playing = { kind: 'msg', t: 0, dur: 1.8 }; return;
   }
   const d = e.data;
+  if (e.type === 'item') { startItemEvent(e); return; }
   AT.applyAll(AUTH, d.ops);                         // the exact terrain, in server order
   if (d.wind) S.wind = { ang: Math.atan2(d.wind[0], -d.wind[1]), spd: Math.hypot(d.wind[0], d.wind[1]) };
   if (e.type === 'turn') { startTurnEvent(e); return; }
+  if (d.aim && ITEMS[d.aim.weapon]) { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
+  if (d.double) banner(e.seat === S.me ? 'Double Shot: fire again!' : `${P.name}: Double Shot`, 1500);
   P.trails.forEach(t => t.dispose()); P.trails = [];
   for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q === P);
   S.playing = { kind: 'shot', e, P, owner: P, aim: d.aim, phase: 'turn', t: 0, T: 0, from: { yaw: P.yaw, elev: P.elev },
@@ -548,10 +705,32 @@ function startEvent(e) {
   if (e.seat !== S.me) camBehind(P);
   syncUI();
 }
-/** Start-of-turn effects: eruption, snowfall, sudden death. */
+/** A power-up used from the weapon bar (shell power-ups arrive as shots instead). */
+function startItemEvent(e) {
+  const d = e.data, P = S.P[e.seat], it = ITEMS[d.item] || { name: d.item };
+  P.item = null;
+  const who = e.seat === S.me ? 'You' : P.name, at = new THREE.Vector3(P.x, P.y + 5, P.z);
+  let dur = 1.4;
+  if (d.item === 'repair') { P.hp = Math.min(100, P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
+  else if (d.item === 'shield') { setShield(e.seat, true); shieldHit(e.seat); noise(.6, 900, .25, 1); }
+  else if (d.item === 'relocate') {
+    const from = new THREE.Vector3(...d.from); spawnSmoke(from, 4, 2.2, 0xcfc8d8, 3); spawnSmoke(from.clone().setY(from.y + 3), 3, 1.8, 0xcfc8d8, 4);
+    P.reloc = { t: 0, to: d.to }; P.x = d.to[0]; P.z = d.to[2]; P.y = d.to[1] + 40; dur = 2.6;
+    camAt(d.to[0], d.to[1], d.to[2], 70);
+  }
+  banner(`${who} used ${it.name}`, 1600);
+  S.playing = { kind: 'msg', t: 0, dur };
+  syncUI();
+}
+/** Start-of-turn effects: shields wearing off, eruption, fire, snowfall, sudden death, supply drops. */
 function startTurnEvent(e) {
   const d = e.data, msgs = [];
   envTrails.forEach(t => t.dispose()); envTrails = [];
+  for (const s of d.shield_end || []) setShield(s, false);
+  for (const b of d.burn || []) { const Q = S.P[b.seat]; Q.hp = Math.max(0, Q.hp - b.dmg); if (b.abs) shieldHit(b.seat);
+    popup(b.dmg ? `-${b.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff9a4a'); }
+  for (const id of d.fire_end || []) removeFire(id);
+  for (const c of d.crates || []) { addCrate(c, true); msgs.push('Supply drop!'); camAt(c.x, c.y, c.z, 90*MS); }
   if (d.snow) {
     for (const op of d.ops) if (op[0] === 'f') AT.apply(VT, op);
     for (let k = 0; k < scorch.length; k++) scorch[k] *= .82;
@@ -566,7 +745,8 @@ function startTurnEvent(e) {
   if (msgs.length) banner(msgs.join(' '), 2200);
   const projs = prepProjs(d.bombs);
   S.playing = { kind: 'shot', e, P: null, owner: null, aim: null, phase: projs.length ? 'fly' : 'pause', t: 0, T: 0,
-                projs, falls: d.falls, deaths: d.deaths, ops: d.ops.length, wait: d.sudden && d.sudden.first ? 1.6 : d.snow && !projs.length ? .5 : .9 };
+                projs, falls: d.falls, deaths: d.deaths, ops: d.ops.length,
+                wait: d.crates ? 2.4 : d.sudden && d.sudden.first ? 1.6 : d.snow && !projs.length ? .5 : d.burn ? 1.1 : .9 };
   syncUI();
 }
 function lerpAngle(a, b, k) { const d = ((b - a + 540) % 360) - 180; return (a + d*k + 360) % 360; }
@@ -624,7 +804,8 @@ function updateEvent(dt) {
       const Q = S.P[f.seat];
       if (f.y > Q.y) { Q.y = f.y; continue; }        // lifted (rubble, snow, the growing cone)
       if (Q.y > f.y) { Q.fallV += G*dt; Q.y = Math.max(f.y, Q.y - Q.fallV*dt); moving = true;
-        if (Q.y <= f.y && f.dmg > 0) { Q.hp = Math.max(0, Q.hp - f.dmg); popup(`-${f.dmg}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), Q.color.css); syncUI(); } }
+        if (Q.y <= f.y && (f.dmg > 0 || f.abs)) { Q.hp = Math.max(0, Q.hp - f.dmg); if (f.abs) shieldHit(f.seat);
+          popup(f.dmg ? `-${f.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), Q.color.css); syncUI(); } }
     }
     if (moving) return;
     for (const s of pl.deaths) { const Q = S.P[s]; banner(`${Q.name} destroyed!`, 1500); setDead(Q, true); }
@@ -636,15 +817,24 @@ function updateEvent(dt) {
 function boom(b, lava) {
   const pos = new THREE.Vector3(b.x, b.y, b.z);
   if (b.splash) { spawnSplash(pos, b.vr); sndSplash(); }
-  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : 0xffc04a); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
-  for (const h of b.hits) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); popup(`-${h.dmg}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), Q.color.css); }
+  else if (b.mound) {                                   // Earthmover: the ground heaves up
+    AT.raise(VT, b.x, b.z, b.vr, 5, 2); updateTerrainMesh();
+    spawnSmoke(pos, b.vr*1.1, 2.6, 0x8a7458, 2.5); spawnDebris(pos, 5, 0x6a5238, 7); sndBoom(.5); addFlash(pos, .5);
+  }
+  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : b.fire ? 0xff6a1a : 0xffc04a); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
+  if (b.fire) addFire(b.fire);
+  for (const h of b.hits) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); if (h.abs) shieldHit(h.seat);
+    popup(h.dmg ? `-${h.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), h.dmg ? Q.color.css : '#6cc6ff'); }
   for (const r of b.obj || []) damageObject(r);
+  for (const c of b.crates || []) removeCrate(c.id, c.by === null ? 'destroyed' : 'claimed', c.by, c.item);
   syncUI();
 }
 function endEvent() {
   const pl = S.playing;
   S.playing = null;
+  const id = S.showing; setTimeout(() => { S.shown = Math.max(S.shown, id); }, 1500);   // reported a moment later: the AI's "aiming" pause
   if (pl && pl.ops) { syncTerrain(); placeVent(); }
+  regroundCrates();
   if (!S.queue.length && S.snap) applySnap(S.snap);
 }
 
@@ -654,13 +844,30 @@ function banner(t, ms = 1500) { const b = $('#banner'); b.textContent = t; b.cla
 function buildWeaponButtons() {
   const w = $('#weps'); w.innerHTML = '';
   WKEYS.forEach(k => { const b = document.createElement('button'); b.className = 'wep'; b.dataset.k = k; b.onclick = () => selectWeapon(k); w.appendChild(b); });
+  const ib = document.createElement('button'); ib.className = 'wep item'; ib.id = 'itemBtn'; ib.onclick = useItem; w.appendChild(ib);
 }
 function selectWeapon(k) { const me = S.P[S.me]; if (!me || !myTurn() || me.ammo[k] === 0) return; S.aim.weapon = k; syncUI(); }
+function syncItemButton(me, mine) {
+  const b = $('#itemBtn'); if (!b) return;
+  const it = me.item ? ITEMS[me.item] : null;
+  b.disabled = !it || !mine || me.item === 'flare';
+  b.classList.toggle('on', !!it && S.aim.weapon === me.item);
+  b.classList.toggle('has', !!it);
+  b.style.setProperty('--ic', it ? it.color : '');
+  b.title = it ? `${it.name}: ${it.tip}` : 'Power-up slot: shoot a supply crate (within 4 m) to claim what is inside';
+  const act = !it ? 'empty' : it.kind === 'shell' ? (S.aim.weapon === me.item ? 'loaded' : 'load') : it.kind === 'turn' ? 'use · ends turn' : 'use';
+  b.innerHTML = `<span>${it ? `<i>${it.icon}</i>${esc(it.name)}` : 'Power-up'}</span><kbd>${act}${DEV.touch || !it ? '' : ' · 4'}</kbd>`;
+}
+function forecastHtml() {
+  const f = S.fx && S.fx.forecast; if (!f || !f.length || !S.match) return '';
+  return '<div class="fc"><b>FORECAST</b>' + f.filter(x => x[0] > S.match.turn || (x[0] === S.match.turn && S.match.seat === S.me)).map(([t, a, sp]) =>
+    `<div>Turn ${t}: <i style="display:inline-block;transform:rotate(${(a + cam.yaw)/D2R}deg)">↑</i> ${RULES.wind_max <= 0 ? 'none' : sp < .5 ? 'calm' : sp.toFixed(1) + ' m/s'}</div>`).join('') + '</div>';
+}
 function boardStatus() {
   const m = S.match, r = RULES; if (!m || !r) return '';
   if (m.status === 'finished') return '';
   const out = [];
-  if (m.turn >= S.map.sudden_turn) out.push('<b class="sd">SUDDEN DEATH</b> −5 hp a turn');
+  if (m.turn >= S.map.sudden_turn) out.push(`<b class="sd">SUDDEN DEATH</b> −${S.map.sudden_drain ?? 5} hp a turn`);
   else if (m.turn >= S.map.sudden_turn - 5) out.push(`Sudden death in ${S.map.sudden_turn - m.turn} turn${S.map.sudden_turn - m.turn > 1 ? 's' : ''}`);
   if (r.erupt_every) { const k = r.erupt_every - (m.turn % r.erupt_every); out.push(`Eruption in ${k} turn${k > 1 ? 's' : ''}`); }
   return out.join(' · ');
@@ -668,27 +875,30 @@ function boardStatus() {
 function syncUI() {
   if (!S.loaded && !S.match) return;
   const m = S.match, me = S.P[S.me];
-  $('#roundLbl').textContent = m && m.status === 'finished' ? 'BATTLE OVER' : `RANKED · ${S.map ? S.map.name.toUpperCase() : ''} · TURN ${m ? m.turn : ''}`;
+  $('#roundLbl').textContent = m && m.status === 'finished' ? 'BATTLE OVER' : `${MODE_NAMES[m && m.game_mode] || 'RANKED'} · ${S.map ? S.map.name.toUpperCase() : ''} · TURN ${m ? m.turn : ''}`;
   $('#boardStatus').innerHTML = boardStatus();
   $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
-    <div class="nm" style="color:${q.color.css}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i></div>
-    <div class="wins"><span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}</div>
+    <div class="nm" style="color:${q.color.css}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
+    <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
     <div class="hp"><i style="width:${q.hp}%;background:${q.hp > 50 ? '#7bd389' : q.hp > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
   if (!me) return;
   const cur = m ? S.P[m.seat] : null, mine = myTurn();
   const name = S.playing && S.playing.P ? S.playing.P : cur;
   $('#whoName').textContent = mine ? 'Your shot' : name ? name.name : '';
   $('#whoName').style.color = mine ? me.color.css : name ? name.color.css : '';
+  const dbl = S.fx && S.fx.double, second = dbl && dbl.seat === m?.seat && dbl.shots > 0, armed = dbl && dbl.seat === m?.seat && !dbl.shots;
   $('#whoTag').textContent = !m ? '' : m.status === 'finished' ? 'Battle over' : me.dead ? 'You were destroyed. Watching the battle.'
-    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? '' : 'is aiming…';
+    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
   $('#panel').classList.toggle('off', !mine);
   $('#fire').disabled = !mine;
-  document.querySelectorAll('.wep').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
+  document.querySelectorAll('.wep:not(.item)').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
     b.classList.toggle('on', S.aim.weapon === k); b.disabled = a === 0;
     b.innerHTML = `<span>${WEAPONS[k].name}</span><kbd>${a == null ? '∞' : '×' + a}${DEV.touch ? '' : ' · ' + WEAPONS[k].key}</kbd>`; });
+  syncItemButton(me, mine);
+  $('#forecast').innerHTML = forecastHtml();
   syncSliders();
-  const bonus = m && RULES ? Math.max(0, m.turn - S.map.sudden_turn + 1) * 2 * (RULES.wind_max > 0 ? 1 : 0) : 0;
+  const bonus = m && RULES ? Math.max(0, m.turn - S.map.sudden_turn + 1) * (S.map.sudden_wind ?? .5) * (RULES.wind_max > 0 ? 1 : 0) : 0;
   $('#windSpd').innerHTML = RULES && RULES.wind_max <= 0 ? 'None' : S.wind.spd < .5 ? 'Calm' : `${S.wind.spd.toFixed(1)} m/s${bonus ? '<small class="sd"> +storm</small>' : ''}`;
   if (m && m.status === 'finished' && !S.playing && !S.queue.length && !S.endShown) showEnd();
 }
@@ -704,10 +914,12 @@ function showEnd() {
   const me = S.P[S.me], w = rows.filter(r => r.placement === 1);
   $('#eTitle').innerHTML = me.placement === 1 && w.length === 1 ? 'Victory!' : w.length === 1 ? `<span style="color:${w[0].color.css}">${esc(w[0].name)}</span> wins` : 'Draw';
   const ord = n => ['', '1st', '2nd', '3rd', '4th'][n] || n;
-  $('#eTable').innerHTML = '<tr><th>PLACE</th><th>COMMANDER</th><th>KILLS</th><th>DAMAGE</th><th>RATING</th></tr>' + rows.map(p => {
+  const rated = !S.match.game_mode || S.match.game_mode === 'ranked';
+  $('#eTable').innerHTML = `<tr><th>PLACE</th><th>COMMANDER</th><th>KILLS</th><th>DAMAGE</th><th>${rated ? 'RATING' : ''}</th></tr>` + rows.map(p => {
     const d = (p.rating_after ?? p.rating) - p.rating;
     return `<tr><td class="place">${ord(p.placement)}</td><td style="color:${p.color.css};font-weight:700">${esc(p.name)}${p.seat === S.me ? ' <small style="color:var(--dim)">YOU</small>' : ''}</td>
-      <td>${p.kills}</td><td>${p.damage}</td><td>${p.rating_after ?? p.rating} <span class="${d >= 0 ? 'up' : 'down'}">(${d >= 0 ? '+' : ''}${d})</span></td></tr>`; }).join('');
+      <td>${p.kills}</td><td>${p.damage}</td><td>${rated ? `${p.rating_after ?? p.rating} <span class="${d >= 0 ? 'up' : 'down'}">(${d >= 0 ? '+' : ''}${d})</span>` : ''}</td></tr>`; }).join('')
+    + (rated ? '' : `<tr><td colspan="5" class="unrated">${{ private: 'Private match', ai: 'Battle against the AI', casual: 'Casual match' }[S.match.game_mode] || 'Unrated match'}: ratings unchanged.</td></tr>`);
   $('#ovEnd').classList.add('show');
   marker.visible = false;
 }
@@ -773,6 +985,7 @@ addEventListener('keydown', e => {
   keys.add(k);
   if (k === ' ' || k === 'enter') fire();
   else if (k === '1' || k === '2' || k === '3') selectWeapon(WKEYS[+k - 1]);
+  else if (k === '4') useItem();
   else if (k === 'v') camOverview(); else if (k === 'c') $('#bCam').click(); else if (k === 'm') $('#bMute').click();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
@@ -813,9 +1026,24 @@ function updateVisuals(dt, time) {
   else marker.visible = false;
   if (mine) {
     const { o, v } = launch(me, S.aim.yaw, S.aim.elev, S.aim.power); guide.n = 0; const pos = o.clone(), vel = v.clone();
-    for (let i = 0; i < 48; i++) { guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
+    const full = S.fx && S.fx.range && S.fx.range.includes(S.me);
+    if (full) {                                   // Rangefinder: the whole flight, wind included, until it meets the ground
+      const wx = Math.sin(S.wind.ang)*S.wind.spd, wz = -Math.cos(S.wind.ang)*S.wind.spd;
+      for (let i = 0; i < 1200; i++) {
+        guide.push(pos.x, pos.y, pos.z);
+        for (let k = 0; k < 4; k++) { vel.x += wx*.4*STEP; vel.z += wz*.4*STEP; vel.y -= G*STEP; pos.addScaledVector(vel, STEP); }
+        if (pos.y <= heightAt(pos.x, pos.z) || Math.abs(pos.x) > HALF + 4 || Math.abs(pos.z) > HALF + 4) { guide.push(pos.x, Math.max(pos.y, heightAt(pos.x, pos.z)), pos.z); break; }
+      }
+    } else for (let i = 0; i < 48; i++) { guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
+    guide.line.material.color.setHex(full ? 0x9be7c4 : 0xffffff);
     guide.line.visible = true;
   } else guide.line.visible = false;
+  for (const P of S.P) if (P.reloc) {                       // Relocate: the tank parachutes onto its new spot
+    P.reloc.t += dt; const k = Math.min(1, P.reloc.t / 2);
+    P.y = P.reloc.to[1] + 40 * (1 - k);
+    if (k >= 1) { P.y = P.reloc.to[1]; P.reloc = null; spawnSmoke(new THREE.Vector3(P.x, P.y + 1, P.z), 3, 1.4, 0x9a8f78, 1.5); }
+  }
+  updateCrates(dt, time); updateFx(dt, time);
   for (const q of pops) { q.t += dt; q.pos.y += dt*3; const s = project(q.pos); q.el.style.left = s.x + 'px'; q.el.style.top = s.y + 'px'; q.el.style.opacity = String(1 - q.t/1.4); if (q.t > 1.4) { q.el.remove(); q.done = true; } }
   for (let i = pops.length - 1; i >= 0; i--) if (pops[i].done) pops.splice(i, 1);
   $('#windArrow').style.transform = `rotate(${(S.wind.ang + cam.yaw)/D2R}deg)`;

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS `art_users` (
   rating INT NOT NULL DEFAULT 1000,
   games_played INT UNSIGNED NOT NULL DEFAULT 0,
   wins INT UNSIGNED NOT NULL DEFAULT 0,
+  is_bot TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login DATETIME NULL,
   username_key VARCHAR(24) NOT NULL DEFAULT '',
@@ -30,9 +31,11 @@ CREATE TABLE IF NOT EXISTS `art_login_attempts` (
 CREATE TABLE IF NOT EXISTS `art_matches` (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   mode TINYINT UNSIGNED NOT NULL,
+  game_mode VARCHAR(8) NOT NULL DEFAULT 'ranked',
   map_id VARCHAR(16) NULL,
   rules TEXT NULL,
   objects MEDIUMTEXT NULL,
+  effects TEXT NULL,
   status ENUM('active','finished') NOT NULL DEFAULT 'active',
   terrain MEDIUMBLOB NOT NULL,
   wind_ang DOUBLE NOT NULL DEFAULT 0,
@@ -56,6 +59,7 @@ CREATE TABLE IF NOT EXISTS `art_match_players` (
   x DOUBLE NOT NULL, y DOUBLE NOT NULL, z DOUBLE NOT NULL,
   ammo_heavy TINYINT UNSIGNED NOT NULL DEFAULT 3,
   ammo_cluster TINYINT UNSIGNED NOT NULL DEFAULT 2,
+  item VARCHAR(12) NULL,
   strikes TINYINT UNSIGNED NOT NULL DEFAULT 0,
   death_turn INT UNSIGNED NULL,
   last_hit_by TINYINT UNSIGNED NULL,
@@ -76,7 +80,7 @@ CREATE TABLE IF NOT EXISTS `art_match_events` (
   match_id INT UNSIGNED NOT NULL,
   turn_no INT UNSIGNED NOT NULL,
   seat TINYINT UNSIGNED NOT NULL,
-  type ENUM('shot','skip','forfeit','turn') NOT NULL,
+  type ENUM('shot','skip','forfeit','turn','item') NOT NULL,
   payload MEDIUMTEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY ix_match_id (match_id, id),
@@ -86,6 +90,8 @@ CREATE TABLE IF NOT EXISTS `art_match_events` (
 CREATE TABLE IF NOT EXISTS `art_queue` (
   user_id INT UNSIGNED NOT NULL PRIMARY KEY,
   mode TINYINT UNSIGNED NOT NULL,
+  kind VARCHAR(8) NOT NULL DEFAULT 'ranked',
+  map_pref VARCHAR(16) NULL,
   rating INT NOT NULL,
   joined_at INT UNSIGNED NOT NULL,
   last_poll INT UNSIGNED NOT NULL,
@@ -94,3 +100,39 @@ CREATE TABLE IF NOT EXISTS `art_queue` (
   FOREIGN KEY (user_id) REFERENCES `art_users`(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `art_rooms` (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  code CHAR(6) NOT NULL,
+  host_id INT UNSIGNED NOT NULL,
+  settings TEXT NOT NULL,
+  status ENUM('open','started','closed') NOT NULL DEFAULT 'open',
+  match_id INT UNSIGNED NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_code (code),
+  KEY ix_status (status),
+  FOREIGN KEY (host_id) REFERENCES `art_users`(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `art_room_members` (
+  room_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  joined_at INT UNSIGNED NOT NULL,
+  last_poll INT UNSIGNED NOT NULL,
+  PRIMARY KEY (room_id, user_id),
+  UNIQUE KEY uq_user (user_id),
+  FOREIGN KEY (room_id) REFERENCES `art_rooms`(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES `art_users`(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `art_item_log` (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  match_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NULL,
+  game_mode VARCHAR(8) NOT NULL,
+  turn_no INT UNSIGNED NOT NULL,
+  item VARCHAR(12) NOT NULL,
+  action ENUM('drop','claim','replaced','destroyed','use') NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_item (item, action),
+  KEY ix_match (match_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

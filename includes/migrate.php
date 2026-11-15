@@ -13,7 +13,11 @@ function ensure_schema(): void
     $done = true;
     $need = [];
     foreach (['maps' => 'SELECT map_id, rules, objects FROM ' . T('matches') . ' LIMIT 0',
-              'names' => 'SELECT alias, alias_key, username_key, alias_changed_at FROM ' . T('users') . ' LIMIT 0'] as $k => $probe) {
+              'names' => 'SELECT alias, alias_key, username_key, alias_changed_at FROM ' . T('users') . ' LIMIT 0',
+              'items' => 'SELECT m.game_mode, m.effects, p.item, q.kind, q.map_pref, r.code, rm.room_id, l.action FROM ' . T('matches') . ' m, '
+                       . T('match_players') . ' p, ' . T('queue') . ' q, ' . T('rooms') . ' r, ' . T('room_members') . ' rm, ' . T('item_log') . ' l LIMIT 0',
+              'ai' => 'SELECT is_bot FROM ' . T('users') . ' LIMIT 0',
+             ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
     if (!$need) return;
@@ -39,6 +43,25 @@ function ensure_schema(): void
             if ($add) $pdo->exec('ALTER TABLE ' . T('users') . ' ' . implode(', ', $add));
             $upd = $pdo->prepare('UPDATE ' . T('users') . ' SET username_key = ? WHERE id = ?');
             foreach ($pdo->query('SELECT id, username FROM ' . T('users') . " WHERE username_key = ''")->fetchAll() as $r) $upd->execute([name_key($r['username']), $r['id']]);
+        }
+        if (in_array('items', $need, true)) {                    // phase 2: crates, power-ups, Casual and private matches
+            $have = $cols('matches'); $add = [];
+            if (!in_array('game_mode', $have, true)) $add[] = "ADD COLUMN game_mode VARCHAR(8) NOT NULL DEFAULT 'ranked' AFTER mode";
+            if (!in_array('effects', $have, true))   $add[] = 'ADD COLUMN effects TEXT NULL AFTER objects';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('matches') . ' ' . implode(', ', $add));
+            if (!in_array('item', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN item VARCHAR(12) NULL AFTER ammo_cluster');
+            $have = $cols('queue'); $add = [];
+            if (!in_array('kind', $have, true))     $add[] = "ADD COLUMN kind VARCHAR(8) NOT NULL DEFAULT 'ranked' AFTER mode";
+            if (!in_array('map_pref', $have, true)) $add[] = 'ADD COLUMN map_pref VARCHAR(16) NULL AFTER kind';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('queue') . ' ' . implode(', ', $add));
+            $pdo->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item') NOT NULL");
+            require_once __DIR__ . '/schema.php';
+            foreach (schema_sql(cfg('db')['prefix']) as $sql) {   // creates only the tables that are missing
+                if (preg_match('/`[^`]*(rooms|room_members|item_log)`/', $sql)) $pdo->exec($sql);
+            }
+        }
+        if (in_array('ai', $need, true) && !in_array('is_bot', $cols('users'), true)) {   // AI opponents
+            $pdo->exec('ALTER TABLE ' . T('users') . ' ADD COLUMN is_bot TINYINT(1) NOT NULL DEFAULT 0 AFTER wins');
         }
     } finally {
         $pdo->query("SELECT RELEASE_LOCK($lock)");

@@ -18,14 +18,14 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <title>Battle · Artillery 3D</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/game.css?v=2">
+<link rel="stylesheet" href="assets/game.css?v=3">
 </head>
 <body>
 <div id="game" data-match="<?= $mid ?>" data-csrf="<?= h(csrf_token()) ?>" data-user="<?= (int)$u['id'] ?>"></div>
 <canvas id="c"></canvas>
 <div id="labels"></div>
 
-<div id="board" class="panel"><h3 id="roundLbl">RANKED MATCH</h3><div id="mapLine"></div><div id="boardStatus"></div><div id="rows"></div></div>
+<div id="board" class="panel"><h3 id="roundLbl">MATCH</h3><div id="mapLine"></div><div id="boardStatus"></div><div id="rows"></div></div>
 
 <div id="tr">
   <div id="btns">
@@ -34,7 +34,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
     <button class="ibtn" id="bMute" title="Sound (M)" aria-label="Sound">🔊<span> Sound</span></button>
     <button class="ibtn danger" id="bLeave" aria-label="Leave">🏳<span> Leave</span></button>
   </div>
-  <div id="windBox" class="panel"><div class="lbl">WIND</div><div id="windDial"><div id="windArrow"></div></div><div id="windSpd">Calm</div></div>
+  <div id="windBox" class="panel"><div class="lbl">WIND</div><div id="windDial"><div id="windArrow"></div></div><div id="windSpd">Calm</div><div id="forecast"></div></div>
 </div>
 
 <div id="panel" class="panel off">
@@ -68,7 +68,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 </div></div>
 
 <script src="assets/vendor/three.min.js"></script>
-<script src="assets/terrain.js?v=2"></script>
-<script src="assets/game.js?v=2"></script>
+<script src="assets/terrain.js?v=3"></script>
+<script src="assets/game.js?v=7"></script>
 </body>
 </html>

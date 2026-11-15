@@ -183,3 +183,26 @@ a.big{display:inline-block;text-decoration:none}
 [data-layout=phone] table.st{font-size:14px}
 #hint{position:fixed;left:50%;top:38%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:10px 12px;z-index:6;width:min(340px,90vw);font-weight:600}
 #hint button{min-width:56px;min-height:44px;border-radius:8px;border:0;background:var(--accent);color:#1b1f18;font:700 16px Rajdhani}
+
+/* ---- phase 2: power-up slot, crates, forecast ---- */
+.wep.item{border-style:dashed;color:var(--dim)}
+.wep.item.has{border-style:solid;border-color:var(--ic);color:var(--ink);background:color-mix(in srgb,var(--ic) 14%,transparent)}
+.wep.item.on{background:color-mix(in srgb,var(--ic) 32%,transparent)}
+.wep.item i{font-style:normal;color:var(--ic);margin-right:5px}
+.wep.item:disabled.has{opacity:.7}
+.prow .it{display:inline-block;margin-left:6px;font-size:13px;color:var(--ic,#6cc6ff);font-style:normal}
+.prow .it.sh{color:#6cc6ff}
+.crate-l{font-size:12px;opacity:.95}
+#forecast:empty{display:none}
+#forecast .fc{margin-top:6px;padding-top:5px;border-top:1px solid var(--line);font-size:12px;text-align:left}
+#forecast .fc b{display:block;font:400 10px 'Black Ops One';letter-spacing:.12em;color:#9be7c4}
+#forecast i{font-style:normal;color:var(--accent)}
+#eTable .unrated{color:var(--dim);font-size:13px;text-align:center}
+[data-layout=phone] #weps{flex-wrap:nowrap}
+[data-layout=phone] .wep.item kbd{font-size:10px}
+[data-layout=phone] .wep.item span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+[data-layout=phone] #windBox{flex-wrap:wrap;justify-content:center;max-width:44vw}
+[data-layout=phone] #forecast{flex-basis:100%}
+[data-layout=phone] #forecast .fc{margin:2px 0 0;padding-top:3px;font-size:11px;line-height:1.25}
+[data-layout=phone] .prow .it{margin-left:3px;font-size:11px}
+[data-layout=phone] .crate-l{font-size:13px}

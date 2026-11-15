@@ -23,6 +23,9 @@ return [
     'wind_max'      => 8,            // 0 turns wind off on every map; any other value lets each map use its own wind range
     // Maps that ranked matches rotate through (ids from includes/maps.php). Leave out to use the default pool of five.
     // 'ranked_maps' => ['highlands', 'archipelago', 'canyon', 'volcano', 'arctic'],
+    'crate_every'   => 5,            // a supply crate parachutes in at the start of every Nth turn
+    'crate_max'     => 1,            // most crates on the field at once
+    'crate_radius'  => 15,           // crates land anywhere inside a circle this wide (metres) around the point between the tanks
     'allow_register'=> true,         // set false to close sign-ups
     'alias_cooldown_hours' => 24,    // how often a player may change the name others see
     // Extra words to block in usernames and names, on top of the built-in list in includes/names.php.

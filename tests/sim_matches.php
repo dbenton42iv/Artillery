@@ -1,9 +1,13 @@
 <?php
 /*
- * Command-line only. Plays full matches on every map with the real engine (no database) and writes
- * what the server would store: the starting terrain, every event, and the final state.
- * tests/replay_parity.js then replays those events the way the browser does and checks they agree.
- *   php tests/sim_matches.php > /tmp/sims.json
+ * Command-line only. Plays full matches with the real engine (no database) and writes what the server
+ * would store: the starting terrain, every event, and the final state. tests/replay_parity.js then replays
+ * those events the way the browser does and checks they agree. tests/crate_gate.php reads the same file.
+ *   php tests/sim_matches.php [seed] [turns] [seeds per map] > /tmp/sims.json
+ *
+ * Every map is played with 2, 3 and 4 tanks, both as Ranked (ranked-safe power-ups, fair crates) and as
+ * Casual (every power-up, crates anywhere). Tanks shoot at enemies, buildings and crates, and use every
+ * power-up they pick up (shell power-ups are fired; Double Shot fires twice).
  */
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit;
@@ -18,67 +22,105 @@ function resolve_deaths_sim(array &$players, int $turn): array
     foreach ($players as $s => &$p) if ($p['alive'] && $p['hp'] <= 0) { $p['alive'] = false; $p['death_turn'] = $turn; $dead[] = $s; }
     return $dead;
 }
+/** Aim roughly at a point, with noise so some shells miss, splash or hit buildings and crates. */
+function aim_at(array $me, float $tx, float $tz, array $rules): array
+{
+    $dx = $tx - $me['x']; $dz = $tz - $me['z']; $dist = hypot($dx, $dz);
+    $yaw = fmod(rad2deg(atan2($dx, -$dz)) + 360 + (rnd() - .5) * 10, 360);
+    $elev = 30 + rnd() * 40;
+    $v = sqrt($dist * $rules['gravity'] / max(.2, sin(2 * deg2rad($elev))));
+    return [$yaw, $elev, min(100.0, max(10.0, $v / ENG_VMAX * 100 * (0.92 + rnd() * .16)))];
+}
+$jsonClean = fn($x) => json_decode(json_encode($x, JSON_PRESERVE_ZERO_FRACTION), true);
 
 $seed = (int)($argv[1] ?? 1234);
 $turns = (int)($argv[2] ?? 44);
+$perMap = (int)($argv[3] ?? 1);
 $out = [];
-foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 4] as $np) {
-    mt_srand($seed + $mi * 10 + $np);
-    $t0 = microtime(true);
+foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (['ranked', 'casual'] as $gm) for ($rep = 0; $rep < $perMap; $rep++) {
+    mt_srand($seed + $mi * 1000 + $np * 100 + ($gm === 'casual' ? 50 : 0) + $rep * 7);
+    FX::reset();
     $gen = generate_map($mapId, $np);
     $t = $gen['terrain']; $rules = $gen['rules']; $objects = $gen['objects'];
-    $genMs = (microtime(true) - $t0) * 1000;
+    $rules['mode'] = $gm; $rules['ranked'] = $gm === 'ranked'; $rules['items'] = $gm === 'ranked' ? 'safe' : 'all';
     $players = [];
     foreach ($gen['spawns'] as $s => $p) $players[$s] = ['seat' => $s, 'x' => $p[0], 'y' => $p[1], 'z' => $p[2], 'hp' => 100, 'alive' => true,
-                                                        'last_hit_by' => null, 'damage_dealt' => 0, 'death_turn' => null];
+                                                        'last_hit_by' => null, 'damage_dealt' => 0, 'death_turn' => null, 'item' => null];
     $initial = base64_encode($t->pack());
     $objects0 = $objects;
     [$wa, $ws] = initial_wind($rules);
-    $events = []; $seat = 0; $turn = 1; $shotMs = 0; $shots = 0; $maxShot = 0;
-    while ($turn <= $turns) {
-        $alive = array_filter($players, fn($p) => $p['alive']);
-        if (count($alive) <= 1) break;
-        // aim roughly at a random enemy, with noise so some shells miss, splash or hit buildings
-        $me = $players[$seat];
-        $foes = array_values(array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat));
-        $foe = $foes[mt_rand(0, count($foes) - 1)];
-        $tx = $foe['x']; $tz = $foe['z'];
-        $standing = array_values(array_filter($objects, fn($o) => $o['hp'] > 0));
-        if ($standing && rnd() < .5) { $o = $standing[mt_rand(0, count($standing) - 1)]; $tx = $o['x']; $tz = $o['z']; }   // shoot buildings too
-        $dx = $tx - $me['x']; $dz = $tz - $me['z']; $dist = hypot($dx, $dz);
-        $yaw = fmod(rad2deg(atan2($dx, -$dz)) + 360 + (rnd() - .5) * 14, 360);
-        $elev = 30 + rnd() * 40; $g = $rules['gravity'];
-        $v = sqrt($dist * $g / max(.2, sin(2 * deg2rad($elev))));
-        $power = min(100.0, max(10.0, $v / ENG_VMAX * 100 * (0.9 + rnd() * .2)));
-        $wk = ['shell', 'shell', 'heavy', 'cluster'][mt_rand(0, 3)];
-        $wind = wind_vec($wa, $ws);
-        $s0 = microtime(true);
-        $res = simulate_shot($t, $players, $objects, $seat, $yaw, $elev, $power, $wk, $wind, $rules);
-        $ms = (microtime(true) - $s0) * 1000; $shotMs += $ms; $shots++; $maxShot = max($maxShot, $ms);
-        $res['deaths'] = resolve_deaths_sim($players, $turn);
-        $res['aim'] = compact('yaw', 'elev', 'power') + ['weapon' => $wk];
-        $res['wind'] = $wind;
-        $events[] = ['type' => 'shot', 'seat' => $seat, 'turn' => $turn, 'data' => json_decode(json_encode($res, JSON_PRESERVE_ZERO_FRACTION), true)];
-        if (count(array_filter($players, fn($p) => $p['alive'])) <= 1) break;
+    $events = []; $seat = 0; $turn = 1; $stats = ['drops' => 0, 'claims' => 0, 'uses' => []]; $fair = [];
+    $advance = function () use (&$players, &$seat, &$turn, &$wa, &$ws, &$events, &$objects, &$fair, &$stats, $t, $rules, $np, $jsonClean) {
+        $prev = $seat;
         do { $seat = ($seat + 1) % $np; } while (!$players[$seat]['alive']);
         $old = $turn; $turn++;
-        next_wind($wa, $ws, $rules, $old, $turn);
-        $s0 = microtime(true);
-        $fx = start_turn($t, $players, $objects, $rules, $turn);
-        $ms = (microtime(true) - $s0) * 1000; $maxShot = max($maxShot, $ms);
+        if (isset(FX::$e['winds'][$turn])) { [$wa, $ws] = FX::$e['winds'][$turn]; unset(FX::$e['winds'][$turn]); }
+        else next_wind($wa, $ws, $rules, $old, $turn);
+        FX::$e['double'] = null;
+        $fx = start_turn($t, $players, $objects, $rules, $turn, $prev);
         if ($fx) {
+            foreach ($fx['crates'] ?? [] as $c) {
+                $stats['drops']++;
+                $fair[] = ['x' => $c['x'], 'z' => $c['z'], 'turn' => $turn,
+                           'tanks' => array_values(array_map(fn($p) => [$p['x'], $p['z']], array_filter($players, fn($p) => $p['alive'])))];
+            }
             $fx['deaths'] = resolve_deaths_sim($players, $turn);
             $fx['wind'] = wind_vec($wa, $ws);
-            $events[] = ['type' => 'turn', 'seat' => $seat, 'turn' => $turn, 'data' => json_decode(json_encode($fx, JSON_PRESERVE_ZERO_FRACTION), true)];
+            $events[] = ['type' => 'turn', 'seat' => $seat, 'turn' => $turn, 'data' => $jsonClean($fx)];
             if (!$players[$seat]['alive'] && count(array_filter($players, fn($p) => $p['alive'])) > 1) {
                 do { $seat = ($seat + 1) % $np; } while (!$players[$seat]['alive']);
             }
         }
+    };
+    while ($turn <= $turns) {
+        if (count(array_filter($players, fn($p) => $p['alive'])) <= 1) break;
+        $me = $players[$seat]; $item = $me['item']; $wk = null;
+        // use a held power-up
+        if ($item && POWERUPS[$item]['kind'] !== 'shell' && rnd() < .8) {
+            $r = item_effect($t, $players, $objects, $seat, $item, $turn);
+            if (!isset($r['error'])) {
+                $players[$seat]['item'] = null; $stats['uses'][$item] = ($stats['uses'][$item] ?? 0) + 1;
+                if ($item === 'weather') {           // pre-roll the wind exactly as forecast_winds() does
+                    $alive = count(array_filter($players, fn($p) => $p['alive'])); $a = $wa; $sp = $ws;
+                    for ($k = $turn + 1; $k <= $turn + 2 * $alive; $k++) {
+                        if (isset(FX::$e['winds'][$k])) { [$a, $sp] = FX::$e['winds'][$k]; continue; }
+                        next_wind($a, $sp, $rules, $k - 1, $k); FX::$e['winds'][$k] = [$a, $sp];
+                    }
+                }
+                $events[] = ['type' => 'item', 'seat' => $seat, 'turn' => $turn, 'data' => $jsonClean($r['event'])];
+                if ($r['ends_turn']) { $advance(); continue; }
+            }
+        } elseif ($item && POWERUPS[$item]['kind'] === 'shell' && rnd() < .7) { $wk = $item; }
+        $shots = FX::$e['double'] && FX::$e['double']['seat'] === $seat ? 2 : 1;
+        for ($k = 0; $k < $shots; $k++) {
+            $me = $players[$seat];
+            if (!$me['alive'] || count(array_filter($players, fn($p) => $p['alive'])) <= 1) break;
+            $foes = array_values(array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat));
+            $foe = $foes[mt_rand(0, count($foes) - 1)]; $tx = $foe['x']; $tz = $foe['z'];
+            $crates = array_values(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live'));
+            $standing = array_values(array_filter($objects, fn($o) => $o['type'] === 'building' && $o['hp'] > 0));
+            if ($crates && rnd() < .45) { $c = $crates[mt_rand(0, count($crates) - 1)]; $tx = $c['x']; $tz = $c['z']; }
+            elseif ($standing && rnd() < .4) { $o = $standing[mt_rand(0, count($standing) - 1)]; $tx = $o['x']; $tz = $o['z']; }
+            [$yaw, $elev, $power] = aim_at($me, $tx, $tz, $rules);
+            $w = $wk && $k === 0 ? $wk : ['shell', 'shell', 'heavy', 'cluster'][mt_rand(0, 3)];
+            if ($w === $wk) { $players[$seat]['item'] = null; $stats['uses'][$w] = ($stats['uses'][$w] ?? 0) + 1; }
+            FX::$e['range'] = array_values(array_diff(FX::$e['range'], [$seat]));
+            $wind = wind_vec($wa, $ws);
+            $res = simulate_shot($t, $players, $objects, $seat, $yaw, $elev, $power, $w, $wind, $rules);
+            foreach ($res['projectiles'] as $pr) foreach ($pr['boom']['crates'] ?? [] as $c) if ($c['by'] !== null) $stats['claims']++;
+            $res['deaths'] = resolve_deaths_sim($players, $turn);
+            $res['aim'] = compact('yaw', 'elev', 'power') + ['weapon' => $w];
+            $res['wind'] = $wind;
+            if ($shots === 2 && $k === 0) { $res['double'] = 1; FX::$e['double']['shots'] = 1; }
+            $events[] = ['type' => 'shot', 'seat' => $seat, 'turn' => $turn, 'data' => $jsonClean($res)];
+        }
+        if (count(array_filter($players, fn($p) => $p['alive'])) <= 1) break;
+        $advance();
     }
-    $out[] = ['map' => $mapId, 'players_n' => $np, 'rules' => $rules, 'initial' => $initial, 'final' => base64_encode($t->pack()),
+    $out[] = ['map' => $mapId, 'players_n' => $np, 'game_mode' => $gm, 'rules' => $rules, 'initial' => $initial, 'final' => base64_encode($t->pack()),
               'spawns' => $gen['spawns'], 'objects' => $objects0, 'objects_final' => $objects,
-              'players_final' => array_values(array_map(fn($p) => ['hp' => $p['hp'], 'y' => round($p['y'], 3), 'alive' => $p['alive']], $players)),
-              'events' => $events, 'stats' => ['gen_ms' => round($genMs), 'avg_ms' => $shots ? round($shotMs / $shots) : 0,
-              'max_ms' => round($maxShot), 'turns' => $turn, 'blob_kb' => round(strlen($t->pack()) / 1024)]];
+              'players_final' => array_values(array_map(fn($p) => ['hp' => $p['hp'], 'x' => round($p['x'], 3), 'y' => round($p['y'], 3), 'z' => round($p['z'], 3),
+                                                                  'alive' => $p['alive'], 'item' => $p['item']], $players)),
+              'events' => $events, 'crate_drops' => $fair, 'stats' => $stats + ['turns' => $turn]];
 }
 echo json_encode($out, JSON_PRESERVE_ZERO_FRACTION);
