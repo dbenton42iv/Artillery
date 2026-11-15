@@ -62,6 +62,13 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   Heavy (×3) or Cluster (×2), and fire. When your turn comes round, the path of your own last shot is shown
   (not the opponent's that just landed), so you can adjust from it. Wind shifts every turn, craters reshape the ground, and tanks
   that lose the ground under them fall and take damage. Last tank standing wins.
+- **Driving:** on your turn, before you fire, you can drive up to 10 m (`move_per_turn`), in one hop or several.
+  Press **Drive** (or **G**): a ring shows how far you can go. With a mouse, hover to see the route and click to
+  go; on a phone or tablet, tap the ground to see the route, then press **DRIVE**. The tank goes in a straight
+  line and stops early at a slope too steep to climb or a drop too steep to go down, at water, the map edge,
+  another tank or wreck, a building or a crate. Distance is measured along the ground, so climbing uses more of
+  it. Driving doesn't end your turn and doesn't need a target: use it to get out of a fire, out of a crater, or
+  off the spot an enemy has ranged. Esc (or the AIM pad) goes back to aiming. Everyone sees the tank drive.
 - **Maps:** every match is played on one of these (each has its own look, physics and rule):
 
   | Map | Rule | Gravity | Wind |
@@ -89,8 +96,10 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
 - **Supply crates:** a crate parachutes in at the start of every 5th turn, with at most 1 on the field at a time.
   It lands at a random spot inside a 15 m circle around the point between the living tanks: halfway between
   two tanks, or with three or four, the point the same distance from all of them (every match spawns its tanks
-  on one shared circle, so that point exists). Change all three with `crate_every`, `crate_max` and
-  `crate_radius`. Shoot it:
+  on one shared circle, so that point exists; once tanks drive, the circle that best fits where they stand). On
+  **Canyon**, where that point is down in the gorge, crates land only on the plateaus: the search widens up to
+  60 m and picks among the high spots closest to the same distance from every tank. Change all three with
+  `crate_every`, `crate_max` and `crate_radius`. Shoot it:
   a shell exploding within 4 m claims it, and a crate further out but inside a blast is wrecked. Crates are
   sealed: what's inside is decided by the server only at the moment one is claimed, so nobody can know it in
   advance (not even by reading the game's network traffic). Once claimed, everyone sees what it was. You hold
@@ -143,7 +152,8 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
 - **Computer players** (`includes/ai.php`) aim with the real engine: they fly trial shells through the
   actual terrain and wind, search for an angle and power that land on target, then add aiming error by skill
   (Rookie hits an enemy with about 1 shot in 5, Veteran 2 in 5, Ace 3 in 5). They go for crates and use their
-  power-ups. A decision takes well under 0.1 s. Their turns run when your page polls, like timeouts (no cron),
+  power-ups. If one was hit since its last turn (or sits in a fire), it may drive away first, more often at
+  higher skill: whoever hit it had its range. A decision takes well under 0.1 s. Their turns run when your page polls, like timeouts (no cron),
   and they wait until your page reports it has finished replaying the last shot. They play from three bot
   accounts (CPU 1–3) that can't log in and never appear on the leaderboard. A match against the AI ends as soon
   as no human tank is left.
@@ -151,7 +161,8 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   (in `includes/items.php`) can be tuned against real win rates.
 - **Upgrading** from an earlier version: upload the new files. The first request adds the new columns and tables
   (`matches.game_mode`, `effects`; `match_players.item`; `queue.kind`, `map_pref`; `users.is_bot`; `rooms`,
-  `room_members`, `item_log`) by itself. Matches already in progress finish under the rules they started with (no crates).
+  `room_members`, `item_log`; phase 3: `match_players.moved` and the `move` event type) by itself. Matches already
+  in progress finish under the rules they started with (no crates); they do get driving, at the site's setting.
   If your host caches PHP (OPcache), the new files may take a few seconds to be picked up.
 
 ## When something goes wrong
@@ -174,6 +185,7 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
 | `crate_every` | 5 | a supply crate drops at the start of every Nth turn |
 | `crate_max` | 1 | most crates on the field at once |
 | `crate_radius` | 15 | crates land anywhere inside a circle this wide (metres) around the point between the tanks |
+| `move_per_turn` | 10 | metres a tank may drive on its turn before firing; 0 turns driving off |
 | `alias_cooldown_hours` | 24 | how often a player may change their shown name |
 | `blocked_names` | none | extra words to block in usernames and names |
 | `allow_register` | true | set false to close sign-ups |
@@ -196,13 +208,15 @@ api/ai.php           → start a battle against computer players
 api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
+api/move.php         → drive before you fire (server plans the route; doesn't end the turn)
 api/forfeit.php      → leave a match
 includes/            → config, database, game engine, map recipes, power-ups (items.php), private rooms
                        (rooms.php), computer players (ai.php), matchmaking (web access blocked)
 tests/               → php tests/names_test.php (name filter)
-                       php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server)
+                       php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
+                         the browser's drive preview plans exactly the route the server drives)
                        php tests/crate_gate.php /tmp/s.json   (crates land in the circle between the tanks)
-                       php tests/ai_bench.php                 (computer players: speed and accuracy by skill)
+                       php tests/ai_bench.php [--no-drive]    (computer players: speed, accuracy and driving by skill)
 assets/              → CSS, JS, and a bundled copy of three.js (no CDN needed)
 sql/schema.sql       → schema for manual install
 ```

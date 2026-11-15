@@ -13,7 +13,7 @@ const AT = require('../assets/terrain.js');
 const sims = JSON.parse(fs.readFileSync(process.argv[2] || '/tmp/sims.json', 'utf8'));
 const f32 = b64 => { const b = Buffer.from(b64, 'base64'); return new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)); };
 
-let failed = 0;
+let failed = 0, drives = 0, driveBad = 0, allDrives = 0, allBad = 0;
 for (const m of sims) {
   const H0 = f32(m.initial), n = Math.round(Math.sqrt(H0.length)) - 1;
   if (n !== m.rules.n) throw new Error('size mismatch');
@@ -31,6 +31,13 @@ for (const m of sims) {
   const restCrates = () => { for (const o of O) if (o.type === 'crate' && o.state === 'live') o.y = Math.max(AT.heightAt(T, o.x, o.z), WATER); };
   for (const e of m.events) {
     const d = e.data;
+    if (e.type === 'move') {             // the browser's preview (AT.drive) must plan exactly what the server drove
+      const q = d.req, r = AT.drive(T, WATER, q.blk, q.x0, q.z0, q.tx, q.tz, q.budget);
+      drives++;
+      if (r.x !== q.raw.x || r.z !== q.raw.z || r.used !== q.raw.used || r.stop !== q.raw.stop || r.path.length !== q.raw.n) driveBad++;
+      [P[e.seat].x, P[e.seat].y, P[e.seat].z] = d.to;
+      continue;
+    }
     if (e.type === 'item') {
       P[e.seat].item = null;
       if (d.heal) P[e.seat].hp += d.heal;
@@ -56,10 +63,13 @@ for (const m of sims) {
   const oBad = m.objects_final.filter((o, i) => !O[i] || (o.type === 'building' ? o.hp !== O[i].hp
     : o.state !== O[i].state || (o.state === 'live' && Math.abs(o.y - O[i].y) > 1e-9))).length + Math.abs(m.objects_final.length - O.length);
   const crates = m.objects_final.filter(o => o.type === 'crate').length;
-  const ok = diff === 0 && pBad === 0 && oBad === 0;
+  const ok = diff === 0 && pBad === 0 && oBad === 0 && driveBad === 0;
+  allDrives += drives; allBad += driveBad;
   if (!ok) failed++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${m.map.padEnd(12)} ${m.players_n}p ${m.game_mode.padEnd(6)} ${String(m.events.length).padStart(3)} events ${String(ops).padStart(3)} ops ` +
-              `${String(crates).padStart(2)} crates  cells differing: ${diff}${diff ? ` (max ${maxd})` : ''}  tanks off: ${pBad}  objects off: ${oBad}`);
+              `${String(crates).padStart(2)} crates  cells differing: ${diff}${diff ? ` (max ${maxd})` : ''}  tanks off: ${pBad}  objects off: ${oBad}  drives: ${drives}${driveBad ? ` (${driveBad} PLANNED DIFFERENTLY)` : ''}`);
+  drives = 0; driveBad = 0;
 }
+console.log(`Drives: ${allDrives}, browser preview planned differently from the server: ${allBad}`);
 console.log(failed ? `\n${failed} match(es) FAILED` : `\nAll ${sims.length} matches replay identically.`);
 process.exit(failed ? 1 : 0);

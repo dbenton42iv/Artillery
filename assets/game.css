@@ -211,3 +211,13 @@ a.big{display:inline-block;text-decoration:none}
 #netbar{position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top));transform:translateX(-50%);z-index:20;display:flex;gap:12px;align-items:center;
   padding:8px 10px 8px 14px;border-color:rgba(240,180,41,.6);font-weight:700;max-width:calc(100% - 20px)}
 #netbar button{background:var(--accent);color:#1b1f18;border:0;border-radius:8px;padding:8px 14px;font:400 15px 'Black Ops One';cursor:pointer;min-height:40px;flex:none}
+
+/* ---- phase 3: driving ---- */
+.wep.drive{border-color:rgba(123,211,137,.55)}
+.wep.drive i{font-style:normal;color:#7bd389;margin-right:5px}
+.wep.drive.on{border-color:#7bd389;background:rgba(123,211,137,.22)}
+#fire.drv{background:#3f8a4a;box-shadow:0 3px 0 #1f5a28}
+#fire.drv:active{box-shadow:0 1px 0 #1f5a28}
+#fire.drv:disabled{background:#555;box-shadow:none}
+[data-layout=phone] .wep.drive kbd{font-size:10px}
+[data-layout=phone] .wep.drive span{white-space:nowrap;font-size:13px}

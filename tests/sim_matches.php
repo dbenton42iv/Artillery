@@ -12,7 +12,7 @@
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit;
 define('ART3D', true);
-$GLOBALS['ART_CFG'] = ['wind_max' => 8];
+$GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10];
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
 require dirname(__DIR__) . '/includes/engine.php';
 
@@ -49,14 +49,15 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
     $initial = base64_encode($t->pack());
     $objects0 = $objects;
     [$wa, $ws] = initial_wind($rules);
-    $events = []; $seat = 0; $turn = 1; $stats = ['drops' => 0, 'claims' => 0, 'uses' => []]; $fair = [];
+    $events = []; $seat = 0; $turn = 1; $stats = ['drops' => 0, 'claims' => 0, 'uses' => [], 'moves' => 0, 'stops' => []]; $fair = [];
+    $rules['move'] = 10.0;
     $advance = function () use (&$players, &$seat, &$turn, &$wa, &$ws, &$events, &$objects, &$fair, &$stats, $t, $rules, $np, $jsonClean) {
         $prev = $seat;
         do { $seat = ($seat + 1) % $np; } while (!$players[$seat]['alive']);
         $old = $turn; $turn++;
         if (isset(FX::$e['winds'][$turn])) { [$wa, $ws] = FX::$e['winds'][$turn]; unset(FX::$e['winds'][$turn]); }
         else next_wind($wa, $ws, $rules, $old, $turn);
-        FX::$e['double'] = null;
+        FX::$e['double'] = null; FX::$e['moved'] = null;
         $fx = start_turn($t, $players, $objects, $rules, $turn, $prev);
         if ($fx) {
             foreach ($fx['crates'] ?? [] as $c) {
@@ -74,6 +75,21 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
     };
     while ($turn <= $turns) {
         if (count(array_filter($players, fn($p) => $p['alive'])) <= 1) break;
+        // drive: half the time, one or two hops toward random points (some far off, so allowance, slopes and obstacles all get hit)
+        if (rnd() < .5) for ($hop = 0, $left = move_budget($rules); $hop < 2 && $left >= DRIVE_MIN; $hop++) {
+            $me = $players[$seat]; $a = rnd() * M_PI * 2; $d = rnd() * 25;
+            $tx = $me['x'] + sin($a) * $d; $tz = $me['z'] - cos($a) * $d;
+            $blk = drive_blockers($players, $objects, $seat);
+            $raw = drive_path($t, $blk, (float)$me['x'], (float)$me['z'], $tx, $tz, $left);
+            $ev = drive_tank($t, $players, $objects, $seat, $tx, $tz, $left);
+            $stats['stops'][$raw['stop']] = ($stats['stops'][$raw['stop']] ?? 0) + 1;
+            if (isset($ev['error'])) break;
+            $left -= $ev['used']; $stats['moves']++;
+            $ev['req'] = ['x0' => $me['x'], 'z0' => $me['z'], 'tx' => $tx, 'tz' => $tz, 'budget' => $left + $ev['used'], 'blk' => $blk,
+                          'raw' => ['x' => $raw['x'], 'z' => $raw['z'], 'used' => $raw['used'], 'stop' => $raw['stop'], 'n' => count($raw['path'])]];
+            $events[] = ['type' => 'move', 'seat' => $seat, 'turn' => $turn, 'data' => $jsonClean($ev)];
+            if (rnd() < .5) break;
+        }
         $me = $players[$seat]; $item = $me['item']; $wk = null;
         // use a held power-up
         if ($item && POWERUPS[$item]['kind'] !== 'shell' && rnd() < .8) {

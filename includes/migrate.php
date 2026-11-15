@@ -18,6 +18,7 @@ function ensure_schema(): void
                        . T('match_players') . ' p, ' . T('queue') . ' q, ' . T('rooms') . ' r, ' . T('room_members') . ' rm, ' . T('item_log') . ' l LIMIT 0',
               'ai' => 'SELECT is_bot FROM ' . T('users') . ' LIMIT 0',
               'errors' => 'SELECT id FROM ' . T('errors') . ' LIMIT 0',
+              'drive' => 'SELECT moved FROM ' . T('match_players') . ' LIMIT 0',
              ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
@@ -67,6 +68,10 @@ function ensure_schema(): void
         if (in_array('errors', $need, true)) {                   // problem log (server errors and browser crash reports)
             require_once __DIR__ . '/schema.php';
             foreach (schema_sql(cfg('db')['prefix']) as $sql) if (str_contains($sql, cfg('db')['prefix'] . 'errors`')) $pdo->exec($sql);
+        }
+        if (in_array('drive', $need, true)) {                    // phase 3: driving
+            if (!in_array('moved', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN moved FLOAT NOT NULL DEFAULT 0 AFTER kills');
+            $pdo->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move') NOT NULL");
         }
     } finally {
         $pdo->query("SELECT RELEASE_LOCK($lock)");

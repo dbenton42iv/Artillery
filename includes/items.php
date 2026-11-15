@@ -70,13 +70,14 @@ final class FX
     public static array $e = [];
     public static function reset(?array $e = null): void
     {
-        self::$e = ($e ?? []) + ['shields' => [], 'fires' => [], 'double' => null, 'range' => [], 'winds' => [], 'forecast' => [], 'fire_seq' => 0];
+        self::$e = ($e ?? []) + ['shields' => [], 'fires' => [], 'double' => null, 'range' => [], 'winds' => [], 'forecast' => [], 'fire_seq' => 0, 'moved' => null];
     }
     /** Public view sent to every player (no wind forecasts). */
     public static function pub(?int $me): array
     {
         $e = self::$e;
-        $out = ['shields' => (object)$e['shields'], 'fires' => array_values($e['fires']), 'double' => $e['double'], 'range' => array_values($e['range'])];
+        $out = ['shields' => (object)$e['shields'], 'fires' => array_values($e['fires']), 'double' => $e['double'], 'range' => array_values($e['range']),
+                'moved' => $e['moved']];
         if ($me !== null && !empty($e['forecast'][$me])) $out['forecast'] = $e['forecast'][$me];
         return $out;
     }

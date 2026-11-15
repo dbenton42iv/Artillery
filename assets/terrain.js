@@ -78,5 +78,43 @@
   }
   function applyAll(T, ops) { if (ops) for (const op of ops) apply(T, op); }
 
-  return { CELL, make, heightAt, crater, raise, fill, apply, applyAll };
+  /*
+   * Driving: twin of drive_path() in includes/engine.php, used to preview a hop before sending it.
+   * blk = { c: [[x, z, r], ...] circles, b: [[x, z, halfWidth, halfDepth], ...] boxes }; water = sea level (-100 if none).
+   * Returns { path: [[x, y, z], ...] every metre, x, z, used (metres along the ground), stop }.
+   */
+  const DRIVE = { STEP: .25, UP: 1.0, DOWN: 1.2, SAMPLE: 4, EDGE: 6.0, SHORE: .6, TANK_R: 4.5, CRATE_R: 2.6, BUILDING_PAD: 1.8, MIN: .5 };
+  function drive(T, water, blk, x0, z0, tx, tz, budget) {
+    const dx = tx - x0, dz = tz - z0, L = Math.sqrt(dx * dx + dz * dz);
+    let x = x0, z = z0, h = heightAt(T, x, z), used = 0, k = 0, stop = 'arrived';
+    const path = [[x, h, z]];
+    if (L < 0.01) return { path, x, z, used: 0, stop };
+    const ux = dx / L, uz = dz / L, lim = T.half - DRIVE.EDGE, shore = water + DRIVE.SHORE;
+    outer: while (true) {
+      const done = k * DRIVE.STEP;
+      if (done >= L - 1e-9) break;
+      const s = Math.min(DRIVE.STEP, L - done);
+      const nx = x + ux * s, nz = z + uz * s;
+      if (Math.abs(nx) > lim || Math.abs(nz) > lim) { stop = 'edge'; break; }
+      const nh = heightAt(T, nx, nz);
+      if (nh < shore) { stop = 'water'; break; }
+      const g = (nh - h) / s;
+      if (g > DRIVE.UP) { stop = 'steep'; break; }
+      if (g < -DRIVE.DOWN) { stop = 'cliff'; break; }
+      const seg = Math.sqrt(s * s + (nh - h) * (nh - h));
+      if (used + seg > budget + 1e-9) { stop = 'fuel'; break; }
+      for (const c of blk.c) {
+        const a = nx - c[0], b = nz - c[1], d2 = a * a + b * b;
+        if (d2 < c[2] * c[2]) { const a0 = x - c[0], b0 = z - c[1]; if (d2 < a0 * a0 + b0 * b0) { stop = 'blocked'; break outer; } }
+      }
+      for (const c of blk.b) if (Math.abs(nx - c[0]) < c[2] && Math.abs(nz - c[1]) < c[3]) { stop = 'blocked'; break outer; }
+      x = nx; z = nz; h = nh; used += seg; k++;
+      if (k % DRIVE.SAMPLE === 0) path.push([x, h, z]);
+    }
+    const last = path[path.length - 1];
+    if (last[0] !== x || last[2] !== z) path.push([x, h, z]);
+    return { path, x, z, used, stop };
+  }
+
+  return { CELL, make, heightAt, crater, raise, fill, apply, applyAll, DRIVE, drive };
 });

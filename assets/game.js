@@ -456,6 +456,187 @@ class Trail {
 const guide = new Trail(0xffffff, .75);
 let envTrails = [];
 
+/* =====================================================================
+ * Driving (phase 3). On your turn, before you fire, you can drive up to the match's allowance (10 m by default),
+ * in one or more hops. Drive mode shows how far you can go; pick a spot on the ground and the planned route is drawn
+ * with AT.drive(), the twin of the server's drive_path(), so the preview stops where the server will.
+ * Mouse: hover to preview, click to go. Touch: tap to preview, then press DRIVE.
+ * ===================================================================== */
+const DRIVE_SPEED = 7;                                         // m/s on replay
+const STOP_TEXT = { arrived: '', fuel: 'as far as you can go this turn', steep: 'too steep to climb further', cliff: 'the drop ahead is too steep',
+                    water: "can't drive into water", edge: 'edge of the map', blocked: 'something is in the way' };
+const DRV = { on: false, tx: 0, tz: 0, res: null, hoverT: 0 };
+const drvPath = (() => {                                       // the planned route: a ribbon on the ground
+  const max = 400, geo = new THREE.BufferGeometry(), idx = [];
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 2 * 3), 3));
+  for (let k = 0; k < max - 1; k++) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  geo.setIndex(idx); geo.setDrawRange(0, 0);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x7bd389, transparent: true, opacity: .85, side: THREE.DoubleSide, depthWrite: false }));
+  m.frustumCulled = false; m.visible = false; m.renderOrder = 3; scene.add(m);
+  m.set = pts => {                                             // pts: [[x, y, z], ...]
+    const a = geo.attributes.position.array, n = Math.min(max, pts.length), W = WATER === null ? -100 : WATER;
+    for (let k = 0; k < n; k++) {
+      const p0 = pts[Math.max(0, k - 1)], p1 = pts[Math.min(n - 1, k + 1)];
+      let dx = p1[0] - p0[0], dz = p1[2] - p0[2]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+      for (let j = 0; j < 2; j++) {
+        const s = j ? .55 : -.55, x = pts[k][0] - dz * s, z = pts[k][2] + dx * s, i = (k * 2 + j) * 3;
+        a[i] = x; a[i+1] = Math.max(heightAt(x, z), W) + .3; a[i+2] = z;
+      }
+    }
+    geo.attributes.position.needsUpdate = true; geo.setDrawRange(0, Math.max(0, n - 1) * 6);
+  };
+  return m;
+})();
+const drvRing = (() => {                                       // a band lying on the ground at the edge of your reach
+  const n = 96, geo = new THREE.BufferGeometry(), idx = [];
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((n + 1) * 2 * 3), 3));
+  for (let k = 0; k < n; k++) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  geo.setIndex(idx);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xf0b429, transparent: true, opacity: .7, side: THREE.DoubleSide, depthWrite: false }));
+  m.frustumCulled = false; m.visible = false; m.renderOrder = 2; scene.add(m); return m;
+})();
+const drvEnd = new THREE.Mesh(new THREE.TorusGeometry(2.2, .3, 6, 32), new THREE.MeshBasicMaterial({ color: 0x7bd389 }));
+drvEnd.rotation.x = -Math.PI / 2; drvEnd.visible = false; scene.add(drvEnd);
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+
+function moveBudget() { return (S.map && S.map.move) || 0; }
+/** Metres the tank whose turn it is may still drive (from the server's snapshot). */
+function moveLeft() {
+  const mv = S.fx && S.fx.moved, m = S.match;
+  const used = mv && m && mv.seat === m.seat && mv.turn === m.turn ? mv.used : 0;
+  return Math.max(0, moveBudget() - used);
+}
+function canDrive() { return myTurn() && moveLeft() >= AT.DRIVE.MIN && !(S.fx && S.fx.double && S.fx.double.seat === S.me && S.fx.double.shots > 0); }
+/** Same obstacles as drive_blockers() in includes/engine.php. */
+function driveBlockers() {
+  const D = AT.DRIVE, c = [], b = [];
+  for (const Q of S.P) if (Q.seat !== S.me) c.push([Q.x, Q.z, D.TANK_R]);
+  for (const C of CRATES.values()) c.push([C.x, C.z, D.CRATE_R]);
+  for (const O of OBJ) if (O && !O.gone && O.hp > 0) b.push([O.x, O.z, O.hw + D.BUILDING_PAD, O.hd + D.BUILDING_PAD]);
+  return { c, b };
+}
+function clearPreview() { DRV.res = null; drvPath.visible = false; drvEnd.visible = false; }
+function setDrive(on, quiet) {
+  if (on && !canDrive()) { if (!quiet && myTurn()) banner(moveBudget() <= 0 ? 'Driving is off in this match' : 'No driving left this turn', 1600); on = false; }
+  if (DRV.on === on) { if (!on) clearPreview(); return; }
+  DRV.on = on; clearPreview();
+  if (DEV.phone) setDrawer(!on);                               // phones: fold the controls away to see the ground (DRIVE stays)
+  const me = S.P[S.me];
+  if (on && me) { cam.tTarget.set(me.x, me.y, me.z); cam.tDist = Math.max(38, moveLeft() * 4.2); cam.tPitch = 1.05; cam.tYaw = null; }
+  else if (!quiet && me && myTurn()) camBehind({ ...me, yaw: S.aim.yaw });
+  syncUI();
+}
+function groundAt(cx, cy) {
+  if (!terrain) return null;
+  const r = canvas.getBoundingClientRect(); ndc.set((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObject(terrain, false)[0];
+  return hit ? hit.point : null;
+}
+function drivePreview(tx, tz) {
+  const me = S.P[S.me]; if (!me) return;
+  const r = AT.drive(AUTH, WATER === null ? -100 : WATER, driveBlockers(), me.x, me.z, tx, tz, moveLeft());
+  DRV.res = r; DRV.tx = tx; DRV.tz = tz;
+  // a route point every half metre, so the ribbon hugs the ground
+  const pts = [];
+  for (let k = 1; k < r.path.length; k++) { const a = r.path[k-1], b = r.path[k], n = Math.max(1, Math.ceil(Math.hypot(b[0]-a[0], b[2]-a[2]) / .5));
+    for (let j = k === 1 ? 0 : 1; j <= n; j++) pts.push([a[0] + (b[0]-a[0])*j/n, 0, a[2] + (b[2]-a[2])*j/n]); }
+  const ok = r.used >= AT.DRIVE.MIN;
+  drvPath.set(pts.length > 1 ? pts : [[r.x, 0, r.z], [r.x + .01, 0, r.z]]);
+  drvPath.material.color.setHex(ok ? 0x7bd389 : 0xe5484d); drvPath.visible = true;
+  drvEnd.material.color.setHex(ok ? 0x7bd389 : 0xe5484d); drvEnd.position.set(r.x, AT.heightAt(AUTH, r.x, r.z) + .3, r.z); drvEnd.visible = true;
+  syncUI();
+}
+function driveHover(cx, cy) {
+  if (!DRV.on || !myTurn()) return;
+  const now = performance.now(); if (now - DRV.hoverT < 40) return; DRV.hoverT = now;
+  const p = groundAt(cx, cy); if (p) drivePreview(p.x, p.z);
+}
+function driveTap(cx, cy, mouse) {
+  if (!DRV.on || !myTurn()) return;
+  const p = groundAt(cx, cy); if (!p) return;
+  drivePreview(p.x, p.z);
+  if (mouse) doDrive();                                       // a click drives; a tap only previews (press DRIVE to go)
+}
+async function doDrive() {
+  if (!myTurn() || !DRV.on) return;
+  const r = DRV.res;
+  if (!r || r.used < AT.DRIVE.MIN) { banner(r ? `Can't drive there: ${STOP_TEXT[r.stop] || 'blocked'}` : (DEV.touch ? 'Tap the ground to pick a spot' : 'Click the ground to pick a spot'), 1600); return; }
+  ac(); S.sent = true; syncUI();
+  try {
+    const res = await post('api/move.php', { match_id: MID, turn_no: S.match.turn, x: DRV.tx, z: DRV.tz });
+    if (res.error) { S.sent = false; banner(ERR[res.error] || "Couldn't drive", 2200); syncUI(); }
+  } catch (e) { S.sent = false; banner('Network error. Try again.', 2000); syncUI(); }
+}
+function drawRing(me, R) {
+  const a = drvRing.geometry.attributes.position.array, n = 96, W = WATER === null ? -100 : WATER, w = .22 + R * .02;
+  for (let k = 0; k <= n; k++) {
+    const t = k / n * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+    for (let j = 0; j < 2; j++) {
+      const r = R + (j ? w : -w), x = me.x + c * r, z = me.z + s * r, i = (k * 2 + j) * 3;
+      a[i] = x; a[i+1] = Math.max(heightAt(x, z), W) + .35; a[i+2] = z;
+    }
+  }
+  drvRing.geometry.attributes.position.needsUpdate = true;
+}
+function updateDriveVisuals(mine, time) {
+  const show = DRV.on && mine;
+  drvRing.visible = show;
+  if (!show) { drvPath.visible = drvEnd.visible = false; return; }
+  const me = S.P[S.me]; drawRing(me, Math.max(.5, moveLeft()));
+  drvRing.material.opacity = .6 + .2 * Math.sin(time * 3);
+  if (DRV.res) { drvPath.visible = true; drvEnd.visible = true; drvEnd.rotation.z += .02; }
+}
+function syncDriveUI(me, mine) {
+  const b = $('#driveBtn'), fb = $('#fire');
+  if (b) {
+    const left = moveLeft(), cur = S.match && S.match.seat === S.me;
+    b.disabled = !mine || !canDrive();
+    b.classList.toggle('on', DRV.on && mine);
+    b.title = `Drive up to ${moveBudget()} m before you fire. Uphill costs more.`;
+    b.innerHTML = `<span><i>⇲</i>${DRV.on && mine ? 'Driving' : 'Drive'}</span><kbd>${cur ? `${left.toFixed(left < 10 ? 1 : 0)} m left` : `${moveBudget()} m`}${DEV.touch ? '' : ' · G'}</kbd>`;
+  }
+  fb.textContent = DRV.on && mine ? 'DRIVE' : 'FIRE!';
+  fb.classList.toggle('drv', DRV.on && mine);
+  if (DRV.on && mine) {
+    const r = DRV.res, ok = r && r.used >= AT.DRIVE.MIN;
+    fb.disabled = !ok;
+    $('#whoTag').textContent = !r ? (DEV.touch ? 'Tap the ground where you want to go' : 'Click the ground to drive there · Esc to aim')
+      : ok ? `${r.used.toFixed(1)} m${r.stop !== 'arrived' ? ` (${STOP_TEXT[r.stop]})` : ''}${DEV.touch ? ' · press DRIVE' : ''}` : `Can't go that way: ${STOP_TEXT[r.stop]}`;
+  }
+}
+/** Replay a 'move' event: the tank drives along the recorded path, kicking up dust. */
+function startMoveEvent(e) {
+  const d = e.data, P = S.P[e.seat];
+  if (e.seat === S.me) { DRV.on = false; clearPreview(); if (DEV.phone) setDrawer(true); }
+  const pts = d.path.map(p => new THREE.Vector3(p[0], p[1], p[2])), cum = [0];
+  for (let k = 1; k < pts.length; k++) cum.push(cum[k-1] + pts[k].distanceTo(pts[k-1]));
+  const total = cum[cum.length - 1];
+  S.playing = { kind: 'move', e, P, d, pts, cum, total, dur: Math.max(.5, total / DRIVE_SPEED), t: 0, dust: 0, end: 0 };
+  if (e.seat !== S.me) { banner(`${P.name} is on the move`, 1200); camBehind(P); }
+  noise(Math.max(.5, total / DRIVE_SPEED), 90, .35, .6);
+  syncUI();
+}
+function updateMove(pl, dt) {
+  const P = pl.P;
+  if (pl.t >= pl.dur) {                                        // arrived: a short pause, then the next event
+    pl.end += dt;
+    if (pl.end > .45) { [P.x, P.y, P.z] = pl.d.to; if (P.seat === S.me) camBehind({ ...P, yaw: S.aim.yaw }); endEvent(); }
+    return;
+  }
+  pl.t = Math.min(pl.dur, pl.t + dt);
+  const k = pl.t / pl.dur, s = pl.total * k * k * (3 - 2 * k);
+  let i = 1; while (i < pl.pts.length - 1 && pl.cum[i] < s) i++;
+  const a = pl.pts[i-1], b = pl.pts[i], span = pl.cum[i] - pl.cum[i-1], u = span > 0 ? (s - pl.cum[i-1]) / span : 1;
+  P.x = a.x + (b.x - a.x) * u; P.z = a.z + (b.z - a.z) * u; P.y = heightAt(P.x, P.z);
+  if (span > 0) { const want = (Math.atan2(b.x - a.x, -(b.z - a.z)) / D2R + 360) % 360; P.hullYaw = lerpAngle(P.hullYaw, want, Math.min(1, dt * 10)); }
+  props.blast(P.x, P.z, 2.2);                                  // flattens the scenery it drives over
+  pl.dust -= dt;
+  if (pl.dust <= 0) { pl.dust = DEV.phone ? .16 : .09; const r = P.hullYaw * D2R;
+    spawnSmoke(new THREE.Vector3(P.x - Math.sin(r) * 2.4, P.y + .4, P.z + Math.cos(r) * 2.4), 1.1, .9, TH.pal === 'ice' ? 0xe8eef2 : TH.pal === 'moon' ? 0x9a9a9e : 0x9a8668, .8); }
+  cam.tTarget.set(P.x, P.y + 3, P.z);
+}
+
 /* ---------- audio ---------- */
 let actx = null, muted = false;
 function ac() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } return actx; }
@@ -538,13 +719,20 @@ function updateCamera(dt) {
   const gh = heightAt(camera.position.x, camera.position.z); if (camera.position.y < gh + 2) camera.position.y = gh + 2;
   camera.lookAt(cam.target);
 }
-const ptrs = new Map(); let pinch0 = 0;
-canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x-b.x, a.y-b.y); } });
-canvas.addEventListener('pointermove', e => { const p = ptrs.get(e.pointerId); if (!p) return;
+const ptrs = new Map(); let pinch0 = 0, tap = null;
+canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  tap = ptrs.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), mouse: e.pointerType === 'mouse' } : null;
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x-b.x, a.y-b.y); } });
+canvas.addEventListener('pointermove', e => { const p = ptrs.get(e.pointerId);
+  if (!p) { if (e.pointerType === 'mouse') driveHover(e.clientX, e.clientY); return; }
+  if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8) tap = null;
   if (ptrs.size === 1) { cam.yaw -= (e.clientX - p.x)*.006; cam.pitch = clamp(cam.pitch + (e.clientY - p.y)*.005, .06, 1.45); cam.tYaw = null; cam.tPitch = null; }
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x-b.x, a.y-b.y); if (pinch0) cam.tDist = clamp(cam.tDist*pinch0/d, 10, maxDist()); pinch0 = d; } });
-const ptrUp = e => { ptrs.delete(e.pointerId); pinch0 = 0; };
+const ptrUp = e => {
+  const t = tap; tap = null; ptrs.delete(e.pointerId); pinch0 = 0;
+  if (e.type === 'pointerup' && t && t.id === e.pointerId && performance.now() - t.t < 600) driveTap(e.clientX, e.clientY, t.mouse);
+};
 canvas.addEventListener('pointerup', ptrUp); canvas.addEventListener('pointercancel', ptrUp);
 canvas.addEventListener('wheel', e => { e.preventDefault(); cam.tDist = clamp(cam.tDist*Math.exp(e.deltaY*.0012), 10, maxDist()); }, { passive: false });
 
@@ -552,7 +740,7 @@ canvas.addEventListener('wheel', e => { e.preventDefault(); cam.tDist = clamp(ca
 const S = {
   loaded: false, me: -1, P: [], match: null, map: null, since: 0, queue: [], playing: null, snap: null,
   aim: { yaw: 0, elev: 45, power: 55, weapon: 'shell' }, sent: false, deadline: 0, wind: { ang: 0, spd: 0 },
-  endShown: false, stayed: false, lastTurnSeen: -1, shown: 0, showing: 0, fx: { shields: {}, fires: [], double: null, range: [] },
+  endShown: false, stayed: false, lastTurnSeen: -1, shown: 0, showing: 0, fx: { shields: {}, fires: [], double: null, range: [], moved: null },
 };
 const myTurn = () => S.match && S.match.status === 'active' && S.match.seat === S.me && !S.playing && !S.queue.length && !S.sent;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -575,7 +763,7 @@ function init(d) {
     label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div><div class="bar"><i style="background:${c.css}"></i></div>`;
     $('#labels').appendChild(label);
     const P = { ...p, color: c, tank: makeTank(c.hex), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
-    P.tank.hull.rotation.y = -P.yaw*D2R;
+    P.hullYaw = P.yaw; P.tank.hull.rotation.y = -P.yaw*D2R;
     return P;
   });
   props.build(TH.props, [...S.P.map(p => [p.x, p.z, 9]), ...OBJ.map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]), ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : [])]);
@@ -617,7 +805,7 @@ function applySnap(d) {
   if (me && me.ammo && me.ammo[S.aim.weapon] === 0) S.aim.weapon = 'shell';
   if (me && ITEMS[S.aim.weapon] && me.item !== S.aim.weapon) S.aim.weapon = 'shell';
   if (S.match.status === 'active' && S.lastTurnSeen !== S.match.turn) {
-    S.lastTurnSeen = S.match.turn;
+    S.lastTurnSeen = S.match.turn; setDrive(false, true);
     const cur = S.P[S.match.seat];
     if (S.match.seat === S.me) {
       banner('Your turn!'); camBehind({ ...me, yaw: S.aim.yaw }); setDrawer(true);
@@ -674,7 +862,7 @@ async function poll() {
     netFails = 0; netBar(null);
     if (!S.loaded) { try { init(d); } catch (e) { recover(e, 'load'); return; } }
     else {
-      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item')) S.sent = false; }
+      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item' || e.type === 'move')) S.sent = false; }
       S.snap = d;
       if (!S.playing && !S.queue.length) applySnap(d);
     }
@@ -697,6 +885,7 @@ const ERR = { not_your_turn: "It isn't your turn.", stale_turn: 'That turn alrea
               no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.',
               no_item: "You don't have that power-up.", full_hp: 'Your tank is already at full health.', no_spot: 'No clear spot to move to. Try again later.',
               mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.',
+              no_fuel: 'No driving left this turn.', cant_drive: "Can't drive that way.", no_driving: 'Driving is off in this match.',
               server_error: 'The server had a problem. Try again.', network: 'Network error. Try again.' };
 async function useItem() {
   const me = S.P[S.me]; if (!myTurn() || !me || !me.item) return;
@@ -711,6 +900,7 @@ async function useItem() {
 }
 async function fire() {
   if (!myTurn()) return;
+  if (DRV.on) { doDrive(); return; }
   ac();
   S.sent = true; syncUI();
   try {
@@ -733,6 +923,7 @@ function startEvent(e) {
   }
   const d = e.data;
   if (e.type === 'item') { startItemEvent(e); return; }
+  if (e.type === 'move') { startMoveEvent(e); return; }
   AT.applyAll(AUTH, d.ops);                         // the exact terrain, in server order
   if (d.wind) S.wind = { ang: Math.atan2(d.wind[0], -d.wind[1]), spd: Math.hypot(d.wind[0], d.wind[1]) };
   if (e.type === 'turn') { startTurnEvent(e); return; }
@@ -793,6 +984,7 @@ function lerpAngle(a, b, k) { const d = ((b - a + 540) % 360) - 180; return (a +
 function updateEvent(dt) {
   const pl = S.playing;
   if (pl.kind === 'msg') { pl.t += dt; if (pl.t > pl.dur) endEvent(); return; }
+  if (pl.kind === 'move') { updateMove(pl, dt); return; }
   const P = pl.P;
   if (pl.phase === 'pause') { pl.t += dt; if (pl.t > pl.wait) { pl.phase = 'fly'; } return; }
   if (pl.phase === 'turn') {
@@ -885,6 +1077,9 @@ function buildWeaponButtons() {
   const w = $('#weps'); w.innerHTML = '';
   WKEYS.forEach(k => { const b = document.createElement('button'); b.className = 'wep'; b.dataset.k = k; b.onclick = () => selectWeapon(k); w.appendChild(b); });
   const ib = document.createElement('button'); ib.className = 'wep item'; ib.id = 'itemBtn'; ib.onclick = useItem; w.appendChild(ib);
+  if ((S.map && S.map.move) > 0) {
+    const db = document.createElement('button'); db.className = 'wep drive'; db.id = 'driveBtn'; db.onclick = () => setDrive(!DRV.on); w.appendChild(db);
+  }
 }
 function selectWeapon(k) { const me = S.P[S.me]; if (!me || !myTurn() || me.ammo[k] === 0) return; S.aim.weapon = k; syncUI(); }
 function syncItemButton(me, mine) {
@@ -932,10 +1127,11 @@ function syncUI() {
     : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
   $('#panel').classList.toggle('off', !mine);
   $('#fire').disabled = !mine;
-  document.querySelectorAll('.wep:not(.item)').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
+  document.querySelectorAll('.wep[data-k]').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
     b.classList.toggle('on', S.aim.weapon === k); b.disabled = a === 0;
     b.innerHTML = `<span>${WEAPONS[k].name}</span><kbd>${a == null ? '∞' : '×' + a}${DEV.touch ? '' : ' · ' + WEAPONS[k].key}</kbd>`; });
   syncItemButton(me, mine);
+  syncDriveUI(me, mine);
   $('#forecast').innerHTML = forecastHtml();
   syncSliders();
   const bonus = m && RULES ? Math.max(0, m.turn - S.map.sudden_turn + 1) * (S.map.sudden_wind ?? .5) * (RULES.wind_max > 0 ? 1 : 0) : 0;
@@ -1000,7 +1196,7 @@ document.querySelectorAll('.step').forEach(b => {
 });
 (() => {
   const pad = $('#aimPad'); let last = null;
-  pad.addEventListener('pointerdown', e => { if (!myTurn()) return; e.preventDefault(); pad.setPointerCapture(e.pointerId); last = { x: e.clientX, y: e.clientY }; pad.classList.add('on'); });
+  pad.addEventListener('pointerdown', e => { if (!myTurn()) return; e.preventDefault(); if (DRV.on) setDrive(false); pad.setPointerCapture(e.pointerId); last = { x: e.clientX, y: e.clientY }; pad.classList.add('on'); });
   pad.addEventListener('pointermove', e => { if (!last) return;
     const dx = e.clientX - last.x, dy = e.clientY - last.y; last = { x: e.clientX, y: e.clientY };
     if (!myTurn()) return;
@@ -1024,6 +1220,8 @@ addEventListener('keydown', e => {
   if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' '].includes(k)) e.preventDefault();
   keys.add(k);
   if (k === ' ' || k === 'enter') fire();
+  else if (k === 'g') setDrive(!DRV.on);
+  else if (k === 'escape') setDrive(false);
   else if (k === '1' || k === '2' || k === '3') selectWeapon(WKEYS[+k - 1]);
   else if (k === '4') useItem();
   else if (k === 'v') camOverview(); else if (k === 'c') $('#bCam').click(); else if (k === 'm') $('#bMute').click();
@@ -1031,7 +1229,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => keys.clear());
 function handleKeys(dt) {
-  if (!myTurn()) return; const a = S.aim, fine = keys.has('shift') ? .2 : 1; let ch = false;
+  if (!myTurn() || DRV.on) return; const a = S.aim, fine = keys.has('shift') ? .2 : 1; let ch = false;
   const has = (...x) => x.some(y => keys.has(y));
   if (has('arrowleft', 'a')) { a.yaw = (a.yaw - 60*fine*dt + 360) % 360; ch = true; cam.tYaw = -a.yaw*D2R; }
   if (has('arrowright', 'd')) { a.yaw = (a.yaw + 60*fine*dt) % 360; ch = true; cam.tYaw = -a.yaw*D2R; }
@@ -1054,7 +1252,7 @@ function updateVisuals(dt, time) {
   const me = S.P[S.me], mine = myTurn();
   if (mine && me) { me.yaw = S.aim.yaw; me.elev = S.aim.elev; }
   for (const P of S.P) {
-    const t = P.tank; t.group.position.set(P.x, P.y, P.z);
+    const t = P.tank; t.group.position.set(P.x, P.y, P.z); t.hull.rotation.y = -P.hullYaw*D2R;
     t.turret.rotation.y = -P.yaw*D2R; if (!P.dead) t.pivot.rotation.x = P.elev*D2R;
     const s = project(v3.set(P.x, P.y + 4.6, P.z));
     if (!s.vis) P.label.style.display = 'none';
@@ -1064,7 +1262,8 @@ function updateVisuals(dt, time) {
   const m = S.match, cur = m && m.status === 'active' && !S.playing && !S.queue.length ? S.P[m.seat] : null;
   if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
   else marker.visible = false;
-  if (mine) {
+  updateDriveVisuals(mine, time);
+  if (mine && !DRV.on) {
     const { o, v } = launch(me, S.aim.yaw, S.aim.elev, S.aim.power); guide.n = 0; const pos = o.clone(), vel = v.clone();
     const full = S.fx && S.fx.range && S.fx.range.includes(S.me);
     if (full) {                                   // Rangefinder: the whole flight, wind included, until it meets the ground

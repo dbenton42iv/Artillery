@@ -22,6 +22,7 @@ const MAPS = [
     'archipelago' => ['name' => 'Archipelago',  'gravity' => 20.0, 'wind' => [0.0, 10.0], 'water' => 1.6, 'splash' => true,
                       'blurb' => 'Shells that land in the sea splash: smaller blast, no crater.'],
     'canyon'      => ['name' => 'Canyon',       'gravity' => 20.0, 'wind' => [6.0, 14.0], 'water' => 1.6, 'wind_axis' => true,
+                      'crate_high' => true,   // crates land up on the plateaus, never down in the gorge
                       'blurb' => 'Strong wind always blows along the canyon. Lob high.'],
     'volcano'     => ['name' => 'Volcano',      'gravity' => 20.0, 'wind' => [0.0, 6.0],  'water' => 1.6, 'erupt_every' => 4,
                       'blurb' => 'Every 4th turn the vent erupts: 3 lava bombs, and the cone grows.'],

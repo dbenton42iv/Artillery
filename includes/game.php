@@ -177,6 +177,7 @@ function create_match(array $group, int $mode, ?string $mapId = null, array $opt
     $rules['mode'] = $gm; $rules['ranked'] = $gm === 'ranked';
     $rules['items'] = $gm === 'ranked' ? 'safe' : (in_array($opt['items'] ?? 'all', ['all', 'safe', 'off'], true) ? ($opt['items'] ?? 'all') : 'all');
     $rules['turn_seconds'] = (int)($opt['turn_seconds'] ?? cfg('turn_seconds', 40));
+    $rules['move'] = (float)($opt['move'] ?? cfg('move_per_turn', 10));   // metres a tank may drive each turn (0 = no driving)
     if (!empty($opt['bots'])) {                         // which seats the AI drives, and how well it aims
         $rules['bots'] = [];
         foreach ($group as $seat => $g) if (isset($opt['bots'][(int)$g['user_id']])) $rules['bots'][$seat] = $opt['bots'][(int)$g['user_id']];
@@ -230,6 +231,7 @@ function load_players(int $mid): array
     foreach ($st->fetchAll() as $r) {
         foreach (['seat', 'user_id', 'hp', 'alive', 'ammo_heavy', 'ammo_cluster', 'strikes', 'damage_dealt', 'kills', 'rating_before'] as $k) $r[$k] = (int)$r[$k];
         foreach (['x', 'y', 'z'] as $k) $r[$k] = (float)$r[$k];
+        $r['moved'] = (float)($r['moved'] ?? 0);
         $r['last_hit_by'] = $r['last_hit_by'] === null ? null : (int)$r['last_hit_by'];
         $r['death_turn'] = $r['death_turn'] === null ? null : (int)$r['death_turn'];
         $r['alive'] = (bool)$r['alive'];
@@ -241,10 +243,10 @@ function load_players(int $mid): array
 function save_players(int $mid, array $players): void
 {
     $st = db()->prepare('UPDATE ' . T('match_players') . ' SET hp=?, alive=?, x=?, y=?, z=?, ammo_heavy=?, ammo_cluster=?, item=?, strikes=?, death_turn=?,
-                         last_hit_by=?, damage_dealt=?, kills=? WHERE match_id=? AND seat=?');
+                         last_hit_by=?, damage_dealt=?, kills=?, moved=? WHERE match_id=? AND seat=?');
     foreach ($players as $p) {
         $st->execute([$p['hp'], $p['alive'] ? 1 : 0, $p['x'], $p['y'], $p['z'], $p['ammo_heavy'], $p['ammo_cluster'], $p['item'], $p['strikes'], $p['death_turn'],
-                      $p['last_hit_by'], $p['damage_dealt'], $p['kills'], $mid, $p['seat']]);
+                      $p['last_hit_by'], $p['damage_dealt'], $p['kills'], round((float)($p['moved'] ?? 0), 2), $mid, $p['seat']]);
     }
 }
 function add_event(array $m, int $seat, string $type, array $payload): int
@@ -324,6 +326,7 @@ function advance_or_finish(array &$m, array &$players, Terrain $t): ?int
         if ($f) FX::$e['forecast'][$k] = $f; else unset(FX::$e['forecast'][$k]);
     }
     FX::$e['double'] = null;
+    FX::$e['moved'] = null;                             // a fresh driving allowance for the next tank
     $m['current_seat'] = $s; $m['turn_no'] = $new; $m['wind_ang'] = $wa; $m['wind_spd'] = $ws;
     $m['turn_deadline'] = time() + turn_secs($m['rules']);
 
@@ -539,6 +542,51 @@ function use_item(int $mid, int $uid, array $in): array
     } catch (Throwable $e) { $pdo->rollBack(); throw $e; }
 }
 
+/** Metres $seat may still drive this turn. */
+function move_left(array $m, int $seat): float
+{
+    $mv = FX::$e['moved'] ?? null; $used = 0.0;
+    if ($mv && (int)$mv['seat'] === $seat && (int)$mv['turn'] === (int)$m['turn_no']) $used = (float)$mv['used'];
+    return max(0.0, move_budget($m['rules']) - $used);
+}
+
+/**
+ * Drive the tank whose turn it is toward a point. Body: {"match_id", "turn_no", "x", "z"}.
+ * Doesn't end the turn; the tank can drive again while it has allowance left, then fires.
+ */
+function drive(int $mid, int $uid, array $in): array
+{
+    foreach (['x', 'z', 'turn_no'] as $k) if (!isset($in[$k]) || !is_numeric($in[$k]) || !is_finite((float)$in[$k])) return ['error' => 'bad_input'];
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $m = lock_match($mid);
+        if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
+        if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
+        if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
+        $players = load_players($mid);
+        $seat = (int)$m['current_seat'];
+        if ($players[$seat]['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
+        if (move_budget($m['rules']) <= 0) { $pdo->commit(); return ['error' => 'no_driving']; }
+        $dbl = FX::$e['double'];
+        if ($dbl && $dbl['seat'] === $seat && $dbl['shots'] > 0) { $pdo->commit(); return ['error' => 'mid_double']; }
+        $left = move_left($m, $seat);
+        $t = Terrain::unpack($m['terrain'], $m['rules']['water']);
+        $ev = drive_tank($t, $players, $m['objects'], $seat, (float)$in['x'], (float)$in['z'], $left);
+        if (isset($ev['error'])) { $pdo->commit(); return $ev; }
+        $used = move_budget($m['rules']) - $left + $ev['used'];
+        FX::$e['moved'] = ['seat' => $seat, 'turn' => (int)$m['turn_no'], 'used' => round($used, 2)];
+        $ev['left'] = round(max(0.0, move_budget($m['rules']) - $used), 2);
+        $players[$seat]['strikes'] = 0;                  // driving counts as being at the controls
+        $players[$seat]['moved'] = ($players[$seat]['moved'] ?? 0) + $ev['used'];
+        $eid = add_event($m, $seat, 'move', $ev);
+        save_players($mid, $players);
+        save_match($m, null, $eid);
+        $pdo->commit();
+        return ['ok' => true, 'event_id' => $eid, 'left' => $ev['left']];
+    } catch (Throwable $e) { $pdo->rollBack(); throw $e; }
+}
+
 /**
  * Weather Report: roll the wind now for every turn up to the holder's 2nd turn from now, store it so
  * advance_or_finish() uses exactly these values, and return the holder's two: [[turn, angle, speed], ...].
@@ -601,7 +649,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $out['effects'] = FX::pub($mySeat);
     $rules = match_rules($m);
     $out['map'] = ['id' => $rules['map'], 'name' => MAPS[$rules['map']]['name'] ?? $rules['map'], 'blurb' => MAPS[$rules['map']]['blurb'] ?? '',
-                   'rules' => $rules, 'sudden_turn' => SD_TURN, 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
+                   'rules' => $rules, 'move' => move_budget($rules), 'sudden_turn' => SD_TURN, 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
     if ($withTerrain) {
         $out['terrain'] = base64_encode($m['terrain']);
         $out['objects'] = array_map(function ($o) {          // sealed crates: never send what's inside

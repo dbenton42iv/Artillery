@@ -190,18 +190,23 @@ function ring_spawns(int $n, float $rMin, float $rMax): array
     return $out;
 }
 
-/** Centre of the circle best fitting the points (least squares), or null if they are (nearly) in a line. */
+/**
+ * Centre of the circle best fitting the points (least squares on x² + z² = 2ax + 2bz + c), or null if they are
+ * (nearly) in a line. Points on one circle give exactly its centre; tanks that have driven off it give the best fit.
+ */
 function circle_centre(array $pts): ?array
 {
-    [$x0, $z0] = $pts[0]; $a = $b = $c = $d = $e = 0.0;
-    for ($i = 1; $i < count($pts); $i++) {
-        $u = 2 * ($pts[$i][0] - $x0); $v = 2 * ($pts[$i][1] - $z0);
-        $w = $pts[$i][0] ** 2 - $x0 ** 2 + $pts[$i][1] ** 2 - $z0 ** 2;
-        $a += $u * $u; $b += $u * $v; $c += $v * $v; $d += $u * $w; $e += $v * $w;
+    $n = count($pts); $sx = $sz = $sxx = $szz = $sxz = $sw = $sxw = $szw = 0.0;
+    foreach ($pts as [$x, $z]) {
+        $w = $x * $x + $z * $z;
+        $sx += $x; $sz += $z; $sxx += $x * $x; $szz += $z * $z; $sxz += $x * $z; $sw += $w; $sxw += $x * $w; $szw += $z * $w;
     }
-    $det = $a * $c - $b * $b;
-    if (abs($det) < 1e-6 * max(1.0, $a * $c)) return null;
-    return [($c * $d - $b * $e) / $det, ($a * $e - $b * $d) / $det];
+    // normal equations: [[sxx, sxz, sx], [sxz, szz, sz], [sx, sz, n]] · [2a, 2b, c] = [sxw, szw, sw]
+    $det = $sxx * ($szz * $n - $sz * $sz) - $sxz * ($sxz * $n - $sz * $sx) + $sx * ($sxz * $sz - $szz * $sx);
+    if (abs($det) < 1e-9 * max(1.0, $sxx * $szz * $n)) return null;
+    $A = $sxw * ($szz * $n - $sz * $sz) - $sxz * ($szw * $n - $sz * $sw) + $sx * ($szw * $sz - $szz * $sw);
+    $B = $sxx * ($szw * $n - $sz * $sw) - $sxw * ($sxz * $n - $sz * $sx) + $sx * ($sxz * $sw - $szw * $sx);
+    return [$A / $det / 2, $B / $det / 2];
 }
 
 function gen_highlands(Noise $nz, int $n, float $half, int $players): array
@@ -479,6 +484,7 @@ function generate_map(string $mapId, int $players): array
         'mode' => 'ranked', 'items' => 'safe', 'turn_seconds' => (int)cfg('turn_seconds', 40),
         'crate_every' => max(1, (int)cfg('crate_every', CRATE_EVERY)), 'crate_max' => max(1, (int)cfg('crate_max', CRATE_MAX)),
         'crate_radius' => max(0.0, (float)cfg('crate_radius', CRATE_RADIUS)),
+        'crate_high' => !empty($R['crate_high']),
     ];
     return ['terrain' => $t, 'spawns' => $pos, 'objects' => $objects, 'rules' => $rules];
 }
@@ -878,8 +884,9 @@ function crate_fairness(array $players, float $x, float $z): float
 
 /**
  * The point between the living tanks that crates fall around: halfway between two tanks; with three or four,
- * the centre of the circle they stand on (every match spawns its tanks on one shared circle, and survivors of a
- * circle stay on it), which is the same distance from each of them. Falls back to their average position.
+ * the centre of the circle they stand on (every match spawns its tanks on one shared circle, so until anyone drives
+ * it is the same distance from each of them; after that, the circle that best fits where they are). Falls back to
+ * their average position if they stand nearly in a line or that centre is more than 60 m from them.
  */
 function crate_centre(array $players): ?array
 {
@@ -894,15 +901,39 @@ function crate_centre(array $players): ?array
 /**
  * Every mode: a random spot inside a circle of crate_radius metres (15 by default) around the point between the
  * living tanks, chosen evenly over the circle's area, and clear of tanks, buildings and other crates.
- * Returns [x, z, centre x, centre z] or null if nothing in the circle is clear.
+ * Maps with crate_high (Canyon): the spot must also be up on the high ground, no more than 3 m below the lowest
+ * living tank and on dry land, never down in a gorge. The search starts with the usual circle and, while it holds
+ * too few such spots (on Canyon the point between the tanks is in the gorge), widens in 15 m steps up to 60 m; the
+ * crate lands at a random one of the fairest tenth of the high spots found (closest to the same distance from every tank).
+ * Returns [x, z, centre x, centre z] or null if nothing is clear.
  */
-function crate_spot(Terrain $t, array $players, array $objects, float $radius): ?array
+function crate_spot(Terrain $t, array $players, array $objects, float $radius, bool $high = false): ?array
 {
     if (!($c = crate_centre($players))) return null;
-    for ($k = 0; $k < 80; $k++) {
-        $a = rnd() * M_PI * 2; $r = sqrt(rnd()) * $radius;
-        $x = $c[0] + cos($a) * $r; $z = $c[1] + sin($a) * $r;
-        if (crate_spot_ok($t, $players, $objects, $x, $z)) return [$x, $z, $c[0], $c[1]];
+    $floor = -INF;
+    if ($high) {
+        $floor = max($t->water + .6, min(array_map(fn($p) => (float)$p['y'], array_filter($players, fn($p) => $p['alive']))) - 3);
+    }
+    $ok = fn(float $x, float $z) => crate_spot_ok($t, $players, $objects, $x, $z) && (!$high || $t->heightAt($x, $z) >= $floor);
+    if (!$high) {
+        for ($k = 0; $k < 80; $k++) {
+            $a = rnd() * M_PI * 2; $r = sqrt(rnd()) * $radius;
+            $x = $c[0] + cos($a) * $r; $z = $c[1] + sin($a) * $r;
+            if ($ok($x, $z)) return [$x, $z, $c[0], $c[1]];
+        }
+        return null;
+    }
+    for ($R = max(15.0, $radius); $R <= 60 + 1e-9; $R += 15) {
+        $found = [];
+        for ($k = 0; $k < 200; $k++) {
+            $a = rnd() * M_PI * 2; $r = sqrt(rnd()) * $R;
+            $x = $c[0] + cos($a) * $r; $z = $c[1] + sin($a) * $r;
+            if ($ok($x, $z)) $found[] = [crate_fairness($players, $x, $z), $x, $z];
+        }
+        if (count($found) < 6) continue;
+        sort($found);
+        $pick = $found[mt_rand(0, max(3, intdiv(count($found), 10)) - 1)];
+        return [$pick[1], $pick[2], $c[0], $c[1]];
     }
     return null;
 }
@@ -914,7 +945,8 @@ function drop_crate(Terrain $t, array $players, array &$objects, array $rules, i
     if (!$pool) return null;
     $live = count(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live'));
     if ($live >= max(1, (int)($rules['crate_max'] ?? CRATE_MAX))) return null;
-    $spot = crate_spot($t, $players, $objects, (float)($rules['crate_radius'] ?? CRATE_RADIUS));
+    $high = (bool)($rules['crate_high'] ?? (($rules['map'] ?? '') === 'canyon'));   // Canyon matches from before this rule get it too
+    $spot = crate_spot($t, $players, $objects, (float)($rules['crate_radius'] ?? CRATE_RADIUS), $high);
     if (!$spot) return null;
     $x = round($spot[0], 3); $z = round($spot[1], 3);
     // contents are rolled when the crate is claimed (explode_at), from the pool named here
@@ -942,6 +974,89 @@ function relocate_spot(Terrain $t, array $players, array $objects, int $seat): ?
         return [round($x, 3), round($y, 3), round($z, 3)];
     }
     return null;
+}
+
+/* =====================================================================
+ * Driving (phase 3): on its turn, before firing, a tank may drive up to the match's per-turn allowance
+ * (rules 'move', 10 m by default) in one or more hops. Each hop goes in a straight line toward a point
+ * the player picked and stops early at a slope too steep to climb or descend, water, the map edge,
+ * another tank or wreck, a building, a crate, or when the allowance runs out. Distance is measured
+ * along the ground, so climbing costs more than driving on the flat.
+ * drive_path() has a twin, drive() in assets/terrain.js, which the battle page uses to preview a hop.
+ * Both use the same steps and arithmetic (tests/drive_parity checks they agree).
+ * ===================================================================== */
+const DRIVE_STEP = 0.25, DRIVE_UP = 1.0, DRIVE_DOWN = 1.2, DRIVE_SAMPLE = 4, DRIVE_EDGE = 6.0, DRIVE_SHORE = 0.6;
+const DRIVE_TANK_R = 4.5, DRIVE_CRATE_R = 2.6, DRIVE_BUILDING_PAD = 1.8, DRIVE_MIN = 0.5;
+
+/** Per-turn driving allowance in metres for a match (matches from before phase 3 use the site setting). */
+function move_budget(array $rules): float { return max(0.0, (float)($rules['move'] ?? cfg('move_per_turn', 10))); }
+
+/** What a tank can't drive through: other tanks (wrecks too) and crates as circles, standing buildings as boxes. */
+function drive_blockers(array $players, array $objects, int $seat): array
+{
+    $b = ['c' => [], 'b' => []];
+    foreach ($players as $s => $pl) if ($s !== $seat) $b['c'][] = [(float)$pl['x'], (float)$pl['z'], DRIVE_TANK_R];
+    foreach ($objects as $o) {
+        if ($o['type'] === 'crate' && $o['state'] === 'live') $b['c'][] = [(float)$o['x'], (float)$o['z'], DRIVE_CRATE_R];
+        elseif ($o['type'] === 'building' && $o['hp'] > 0) $b['b'][] = [(float)$o['x'], (float)$o['z'], $o['hw'] + DRIVE_BUILDING_PAD, $o['hd'] + DRIVE_BUILDING_PAD];
+    }
+    return $b;
+}
+
+/**
+ * Drive from (x0, z0) toward (tx, tz) with $budget metres of allowance.
+ * Returns ['path' => [[x, y, z], ...] every metre, 'x', 'z' (where it stopped), 'used' (metres along the ground),
+ *          'stop' => arrived | fuel | steep | cliff | water | edge | blocked].
+ */
+function drive_path(Terrain $t, array $blk, float $x0, float $z0, float $tx, float $tz, float $budget): array
+{
+    $dx = $tx - $x0; $dz = $tz - $z0; $L = sqrt($dx * $dx + $dz * $dz);
+    $x = $x0; $z = $z0; $h = $t->heightAt($x, $z); $used = 0.0; $k = 0; $stop = 'arrived';
+    $path = [[$x, $h, $z]];
+    if ($L < 0.01) return ['path' => $path, 'x' => $x, 'z' => $z, 'used' => 0.0, 'stop' => $stop];
+    $ux = $dx / $L; $uz = $dz / $L; $lim = $t->half - DRIVE_EDGE; $shore = $t->water + DRIVE_SHORE;
+    while (true) {
+        $done = $k * DRIVE_STEP;
+        if ($done >= $L - 1e-9) break;
+        $s = min(DRIVE_STEP, $L - $done);
+        $nx = $x + $ux * $s; $nz = $z + $uz * $s;
+        if (abs($nx) > $lim || abs($nz) > $lim) { $stop = 'edge'; break; }
+        $nh = $t->heightAt($nx, $nz);
+        if ($nh < $shore) { $stop = 'water'; break; }
+        $g = ($nh - $h) / $s;
+        if ($g > DRIVE_UP) { $stop = 'steep'; break; }
+        if ($g < -DRIVE_DOWN) { $stop = 'cliff'; break; }
+        $seg = sqrt($s * $s + ($nh - $h) * ($nh - $h));
+        if ($used + $seg > $budget + 1e-9) { $stop = 'fuel'; break; }
+        foreach ($blk['c'] as $c) {                       // inside a circle and getting closer to its centre
+            $a = $nx - $c[0]; $b = $nz - $c[1]; $d2 = $a * $a + $b * $b;
+            if ($d2 < $c[2] * $c[2]) { $a0 = $x - $c[0]; $b0 = $z - $c[1]; if ($d2 < $a0 * $a0 + $b0 * $b0) { $stop = 'blocked'; break 2; } }
+        }
+        foreach ($blk['b'] as $c) if (abs($nx - $c[0]) < $c[2] && abs($nz - $c[1]) < $c[3]) { $stop = 'blocked'; break 2; }
+        $x = $nx; $z = $nz; $h = $nh; $used += $seg; $k++;
+        if ($k % DRIVE_SAMPLE === 0) $path[] = [$x, $h, $z];
+    }
+    $last = end($path);
+    if ($last[0] !== $x || $last[2] !== $z) $path[] = [$x, $h, $z];
+    return ['path' => $path, 'x' => $x, 'z' => $z, 'used' => $used, 'stop' => $stop];
+}
+
+/**
+ * Move $seat toward (tx, tz) with $left metres of allowance. Changes $players in place.
+ * Returns the replay record for a 'move' event, or ['error' => code].
+ */
+function drive_tank(Terrain $t, array &$players, array $objects, int $seat, float $tx, float $tz, float $left): array
+{
+    $me = &$players[$seat];
+    if ($left < DRIVE_MIN) return ['error' => 'no_fuel'];
+    $r = drive_path($t, drive_blockers($players, $objects, $seat), (float)$me['x'], (float)$me['z'], $tx, $tz, $left);
+    if ($r['used'] < DRIVE_MIN - 1e-9) return ['error' => 'cant_drive', 'stop' => $r['stop']];
+    $x = round($r['x'], 3); $z = round($r['z'], 3); $y = round($t->heightAt($x, $z), 3);
+    $ev = ['from' => [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)], 'to' => [$x, $y, $z],
+           'path' => array_map('r3', $r['path']), 'used' => round($r['used'], 2), 'stop' => $r['stop']];
+    $ev['path'][count($ev['path']) - 1] = [$x, $y, $z];
+    [$me['x'], $me['y'], $me['z']] = [$x, $y, $z];
+    return $ev;
 }
 
 /**

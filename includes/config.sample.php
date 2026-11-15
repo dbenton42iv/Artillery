@@ -26,6 +26,7 @@ return [
     'crate_every'   => 5,            // a supply crate parachutes in at the start of every Nth turn
     'crate_max'     => 1,            // most crates on the field at once
     'crate_radius'  => 15,           // crates land anywhere inside a circle this wide (metres) around the point between the tanks
+    'move_per_turn' => 10,           // metres a tank may drive on its turn before firing (0 turns driving off)
     'allow_register'=> true,         // set false to close sign-ups
     'alias_cooldown_hours' => 24,    // how often a player may change the name others see
     // Extra words to block in usernames and names, on top of the built-in list in includes/names.php.
