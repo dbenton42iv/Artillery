@@ -87,11 +87,32 @@ function current_user(): ?array
     if ($u !== false) return $u;
     $id = $_SESSION['uid'] ?? null;
     if (!$id) return $u = null;
-    $st = db()->prepare('SELECT id, username, alias, alias_changed_at, rating, games_played, wins FROM ' . T('users') . ' WHERE id = ?');
-    $st->execute([$id]);
+    try {   // the ban columns arrive with an upgrade; until the first request has run it, read without them
+        $st = db()->prepare('SELECT id, username, alias, alias_changed_at, rating, games_played, wins, banned_until, ban_reason,
+                COALESCE(banned_until > NOW(), 0) AS blocked, TIMESTAMPDIFF(SECOND, NOW(), banned_until) AS ban_left FROM ' . T('users') . ' WHERE id = ?');
+        $st->execute([$id]);
+    } catch (PDOException $e) {
+        $st = db()->prepare('SELECT id, username, alias, alias_changed_at, rating, games_played, wins FROM ' . T('users') . ' WHERE id = ?');
+        $st->execute([$id]);
+    }
     $u = $st->fetch() ?: null;
+    if ($u && !empty($u['blocked'])) {               // banned or paused by an admin: signed out on their next request
+        $GLOBALS['ART_BLOCKED'] = $_SESSION['blocked'] = ban_message($u);
+        unset($_SESSION['uid']);
+        return $u = null;
+    }
     if ($u) { require_once __DIR__ . '/names.php'; $u['name'] = display_name($u); }
     return $u;
+}
+
+/** What a banned or paused player is told (login page, and when an open page signs them out). */
+function ban_message(array $u): string
+{
+    $left = (int)($u['ban_left'] ?? 0);
+    $msg = $left > 3 * 365 * 86400 ? 'This account has been banned by the site admin.'
+        : 'This account is paused by the site admin for another ' . ($left >= 172800 ? floor($left / 86400) . ' d ' . floor($left % 86400 / 3600) . ' h'
+            : ($left >= 3600 ? floor($left / 3600) . ' h ' . floor($left % 3600 / 60) . ' min' : max(1, (int)ceil($left / 60)) . ' min')) . '.';
+    return $msg . (!empty($u['ban_reason']) ? ' Reason: ' . $u['ban_reason'] : '');
 }
 function require_login(): array
 {
@@ -140,6 +161,7 @@ function log_problem(string $source, string $message, ?int $matchId = null): voi
 function api_user(bool $write = false): array
 {
     $u = current_user();
+    if (!$u && isset($GLOBALS['ART_BLOCKED'])) json_out(['error' => 'suspended', 'message' => $GLOBALS['ART_BLOCKED']], 401);   // pages go to the login page, which says why
     if (!$u) json_out(['error' => 'not_logged_in'], 401);
     if ($write && !csrf_ok($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) json_out(['error' => 'bad_csrf'], 403);
     session_write_close();

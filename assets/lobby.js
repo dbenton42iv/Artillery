@@ -38,8 +38,11 @@
     $$('#modeSeg button').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); mode = +b.dataset.mode;
   });
+  const baseTitle = document.title;
   function showSearching(on) {
     $('#searching').hidden = !on; $('#findBtn').hidden = on;
+    document.querySelector('.hero').classList.toggle('busy', on);
+    document.title = on ? 'Searching… · ' + baseTitle : baseTitle;   // visible in the browser tab while you wait
     $$('#modeSeg button').forEach(b => b.disabled = on);
     $('#casualMap').disabled = on;
     lockTabs(on);
@@ -227,6 +230,7 @@
   });
   const openPicker = on => {
     $('#loPicker').hidden = !on; $('#loEdit').textContent = on ? 'Close' : 'Change'; $('#loEdit').setAttribute('aria-expanded', String(on));
+    document.querySelector('.hero').classList.toggle('picking', on);     // the picker takes the hero's full width
     if (on) { const s = LO.d.saved; LO.pick = s.preset ? { preset: s.preset } : { doctrine: s.doctrine, perks: [...s.perks] }; LO.rp = s.ranked_preset; renderPicker(); }
   };
   $('#loEdit').onclick = () => LO.d && openPicker($('#loPicker').hidden);

@@ -111,3 +111,63 @@ function admin_loadout_stats(): array
     usort($agg, fn($a, $b) => $b['share'] <=> $a['share']);
     return array_values($agg);
 }
+
+/* ---------- banning and pausing players ---------- */
+
+const BAN_FOREVER = '9999-12-31 00:00:00';
+/** Pause lengths offered on the admin page, in hours. */
+const PAUSE_HOURS = [1 => '1 hour', 24 => '1 day', 168 => '1 week', 720 => '30 days'];
+
+/**
+ * Ban (no end) or pause (for $hours) a player. They are signed out on their next request and can't log in until it
+ * ends: their tanks in running matches are withdrawn (as if they left: their opponents play on), and they leave the
+ * matchmaking queue and any private room. Admins and computer players can't be banned. Returns an error or null.
+ */
+function admin_ban(array $admin, int $uid, ?int $hours, string $reason): ?string
+{
+    $st = db()->prepare('SELECT id, username, is_bot FROM ' . T('users') . ' WHERE id = ?');
+    $st->execute([$uid]); $t = $st->fetch();
+    if (!$t) return 'No such player.';
+    if ((int)$t['is_bot']) return "Computer players can't be banned.";
+    if ((int)$t['id'] === (int)$admin['id'] || is_admin($t)) return "Admins can't be banned or paused here; remove them from 'admins' in config.php first.";
+    $reason = trim(mb_substr(preg_replace('/\s+/', ' ', $reason), 0, 200));
+    $until = $hours === null ? BAN_FOREVER : null;
+    db()->prepare('UPDATE ' . T('users') . ' SET banned_until = ' . ($until ? '?' : 'NOW() + INTERVAL ? HOUR') . ', ban_reason = ?, banned_by = ? WHERE id = ?')
+        ->execute([$until ?? $hours, $reason === '' ? null : $reason, $admin['username'], $uid]);
+    // out of everything in progress
+    $q = db()->prepare('SELECT m.id FROM ' . T('matches') . ' m JOIN ' . T('match_players') . " p ON p.match_id = m.id WHERE m.status = 'active' AND p.user_id = ? AND p.alive = 1");
+    $q->execute([$uid]);
+    foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $mid) forfeit((int)$mid, $uid, 'suspended');
+    db()->prepare('DELETE FROM ' . T('queue') . ' WHERE user_id = ?')->execute([$uid]);
+    require_once __DIR__ . '/rooms.php';
+    room_leave($uid);
+    return null;
+}
+
+/** Lift a ban or pause. */
+function admin_unban(int $uid): bool
+{
+    $st = db()->prepare('UPDATE ' . T('users') . ' SET banned_until = NULL, ban_reason = NULL, banned_by = NULL WHERE id = ? AND banned_until IS NOT NULL');
+    $st->execute([$uid]);
+    return $st->rowCount() > 0;
+}
+
+/**
+ * Players for the admin page: everyone banned or paused right now, and, with $q, up to 20 players whose username or
+ * name contains it. Each row: id, username, alias, rating, games, last_login, banned_until, ban_reason, banned_by,
+ * blocked (now), ban_left (seconds).
+ */
+function admin_players(string $q = ''): array
+{
+    $cols = 'id, username, alias, rating, games_played, last_login, banned_until, ban_reason, banned_by,
+             COALESCE(banned_until > NOW(), 0) AS blocked, TIMESTAMPDIFF(SECOND, NOW(), banned_until) AS ban_left';
+    $out = ['blocked' => db()->query("SELECT $cols FROM " . T('users') . ' WHERE banned_until > NOW() ORDER BY banned_until DESC')->fetchAll(), 'found' => []];
+    $q = trim($q);
+    if ($q !== '') {
+        $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q) . '%';
+        $st = db()->prepare("SELECT $cols FROM " . T('users') . ' WHERE is_bot = 0 AND (username LIKE ? OR alias LIKE ?) ORDER BY last_login DESC LIMIT 20');
+        $st->execute([$like, $like]);
+        $out['found'] = $st->fetchAll();
+    }
+    return $out;
+}

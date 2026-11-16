@@ -26,57 +26,15 @@ $ord = fn(int $n) => [1 => '1st', 2 => '2nd', 3 => '3rd', 4 => '4th'][$n] ?? (st
 
 page_head('Lobby', 'lobby'); topbar($u); ?>
 <main class="lobby-grid" data-csrf="<?= h(csrf_token()) ?>">
-  <section class="col">
-    <div class="panel card profile">
-      <div class="rank-badge" style="--rc:<?= h($rank['color']) ?>"><?= h(strtoupper($rank['name'])) ?></div>
-      <div class="profile-name"><?= h($u['name']) ?></div>
-      <?php if (!empty($u['alias'])): ?><div class="muted small">Logs in as <?= h($u['username']) ?></div><?php endif; ?>
-      <?php if (empty($u['alias']) && !name_is_clean($u['username'])): ?>
-      <p class="err">Your username can't be shown to other players, so you appear as <?= h($u['name']) ?>. <a href="account.php">Choose a name</a></p>
+  <section class="panel card hero">
+    <div class="hero-main" id="mm">
+      <h1 class="hero-title">Battle</h1>
+      <?php if ($active): ?>
+      <div class="hero-alert">
+        <div><b>Battle in progress</b><span class="muted">You still have a tank on the field.</span></div>
+        <a class="btn big" href="play.php?id=<?= $active ?>">Rejoin match</a>
+      </div>
       <?php endif; ?>
-      <a class="small" href="account.php">Change name</a>
-      <div class="level-line" title="Levels unlock skills. Every finished match earns XP; rating is separate and only changes in ranked.">
-        <b>LEVEL <?= $level ?></b>
-        <span class="xpbar"><i style="width:<?= $xpNeed ? round(100 * $xpInto / $xpNeed) : 100 ?>%"></i></span>
-        <span class="muted small"><?= $xpNeed ? $xpInto . ' / ' . $xpNeed . ' XP' : 'Top level' ?></span>
-      </div>
-      <div class="stats">
-        <div><b><?= (int)$u['rating'] ?></b><span>Rating</span></div>
-        <div><b>#<?= $myPos ?></b><span>Rank</span></div>
-        <div><b><?= (int)$u['wins'] ?></b><span>Wins</span></div>
-        <div><b><?= (int)$u['games_played'] ?></b><span>Matches</span></div>
-      </div>
-    </div>
-
-    <?php if ($active): ?>
-    <div class="panel card alert">
-      <h2>Battle in progress</h2>
-      <p class="muted">You still have a tank on the field.</p>
-      <a class="btn" href="play.php?id=<?= $active ?>">Rejoin match</a>
-    </div>
-    <?php endif; ?>
-
-    <div class="panel card" id="loadout">
-      <div class="lo-head"><h2>Loadout</h2><button class="link" id="loEdit" type="button" aria-expanded="false">Change</button></div>
-      <div id="loSummary" class="lo-summary muted small">Loading…</div>
-      <div id="loPicker" hidden>
-        <div class="lo-label">Presets <span class="muted small">balanced, open to everyone</span></div>
-        <div class="lo-grid" id="loPresets"></div>
-        <div class="lo-label">Custom build <span class="muted small" id="loCustomNote"></span></div>
-        <div class="lo-sub">Doctrine <span class="muted small">pick 1</span></div>
-        <div class="lo-grid" id="loDoctrines"></div>
-        <div class="lo-sub">Perks <span class="muted small">pick up to 2</span></div>
-        <div class="lo-grid" id="loPerks"></div>
-        <div id="loRankedBox" hidden>
-          <div class="lo-label">In ranked <span class="muted small" id="loRankedNote"></span></div>
-          <div class="seg" id="loRanked"></div>
-        </div>
-        <p class="err" id="loErr" hidden></p>
-        <div class="room-btns"><button class="btn" id="loSave" type="button">Save loadout</button><button class="btn ghost" id="loCancel" type="button">Cancel</button></div>
-      </div>
-    </div>
-
-    <div class="panel card" id="mm">
       <div class="tabs" role="tablist">
         <button role="tab" data-tab="ranked" class="on" aria-selected="true">Ranked</button><button role="tab" data-tab="casual" aria-selected="false">Casual</button><button role="tab" data-tab="private" aria-selected="false">Private</button><button role="tab" data-tab="ai" aria-selected="false">vs AI</button>
       </div>
@@ -157,6 +115,49 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
                                   'room_full' => 'That room is already full (4 players).'][$ie] ?? "Couldn't join that room."); ?></p>
     </div>
 
+    <aside class="hero-side" id="loadout">
+      <div class="lo-head"><h2>Loadout</h2><button class="link" id="loEdit" type="button" aria-expanded="false">Change</button></div>
+      <div id="loSummary" class="lo-summary muted small">Loading…</div>
+      <div id="loPicker" hidden>
+        <div class="lo-label">Presets <span class="muted small">balanced, open to everyone</span></div>
+        <div class="lo-grid" id="loPresets"></div>
+        <div class="lo-label">Custom build <span class="muted small" id="loCustomNote"></span></div>
+        <div class="lo-sub">Doctrine <span class="muted small">pick 1</span></div>
+        <div class="lo-grid" id="loDoctrines"></div>
+        <div class="lo-sub">Perks <span class="muted small">pick up to 2</span></div>
+        <div class="lo-grid" id="loPerks"></div>
+        <div id="loRankedBox" hidden>
+          <div class="lo-label">In ranked <span class="muted small" id="loRankedNote"></span></div>
+          <div class="seg" id="loRanked"></div>
+        </div>
+        <p class="err" id="loErr" hidden></p>
+        <div class="room-btns"><button class="btn" id="loSave" type="button">Save loadout</button><button class="btn ghost" id="loCancel" type="button">Cancel</button></div>
+      </div>
+    </aside>
+  </section>
+
+  <section class="col">
+    <div class="panel card profile">
+      <div class="rank-badge" style="--rc:<?= h($rank['color']) ?>"><?= h(strtoupper($rank['name'])) ?></div>
+      <div class="profile-name"><?= h($u['name']) ?></div>
+      <?php if (!empty($u['alias'])): ?><div class="muted small">Logs in as <?= h($u['username']) ?></div><?php endif; ?>
+      <?php if (empty($u['alias']) && !name_is_clean($u['username'])): ?>
+      <p class="err">Your username can't be shown to other players, so you appear as <?= h($u['name']) ?>. <a href="account.php">Choose a name</a></p>
+      <?php endif; ?>
+      <a class="small" href="account.php">Change name</a>
+      <div class="level-line" title="Levels unlock skills. Every finished match earns XP; rating is separate and only changes in ranked.">
+        <b>LEVEL <?= $level ?></b>
+        <span class="xpbar"><i style="width:<?= $xpNeed ? round(100 * $xpInto / $xpNeed) : 100 ?>%"></i></span>
+        <span class="muted small"><?= $xpNeed ? $xpInto . ' / ' . $xpNeed . ' XP' : 'Top level' ?></span>
+      </div>
+      <div class="stats">
+        <div><b><?= (int)$u['rating'] ?></b><span>Rating</span></div>
+        <div><b>#<?= $myPos ?></b><span>Rank</span></div>
+        <div><b><?= (int)$u['wins'] ?></b><span>Wins</span></div>
+        <div><b><?= (int)$u['games_played'] ?></b><span>Matches</span></div>
+      </div>
+    </div>
+
     <div class="panel card">
       <h2>Practice</h2>
       <p class="muted">Hot-seat and CPU battles in your browser. No rating on the line.</p>
@@ -202,5 +203,5 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
     </div>
   </section>
 </main>
-<script src="assets/lobby.js?v=5"></script>
+<script src="assets/lobby.js?v=6"></script>
 <?php page_foot();

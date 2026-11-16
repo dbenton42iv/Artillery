@@ -6,6 +6,7 @@ require __DIR__ . '/includes/layout.php';
 if (current_user()) redirect(!empty($_SESSION['invite']) ? 'join.php' : 'lobby.php');
 
 $error = null; $username = '';
+if (!empty($_SESSION['blocked'])) { $error = (string)$_SESSION['blocked']; unset($_SESSION['blocked']); }   // signed out by a ban or pause
 $invite = null;
 if (!empty($_SESSION['invite'])) {                       // arrived through a friend's invite link
     require_once __DIR__ . '/includes/names.php';
@@ -26,10 +27,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ((int)$st->fetchColumn() >= 8) {
         $error = 'Too many failed attempts. Wait 15 minutes and try again.';
     } else {
-        $st = db()->prepare('SELECT id, password_hash FROM ' . T('users') . ' WHERE username = ?');
-        $st->execute([$username]);
+        try {
+            $st = db()->prepare('SELECT id, password_hash, ban_reason, COALESCE(banned_until > NOW(), 0) AS blocked, TIMESTAMPDIFF(SECOND, NOW(), banned_until) AS ban_left
+                FROM ' . T('users') . ' WHERE username = ?');
+            $st->execute([$username]);
+        } catch (PDOException $e) {                                        // before the upgrade adds the ban columns
+            $st = db()->prepare('SELECT id, password_hash FROM ' . T('users') . ' WHERE username = ?');
+            $st->execute([$username]);
+        }
         $row = $st->fetch();
-        if ($row && password_verify($password, $row['password_hash'])) {
+        if ($row && !empty($row['blocked']) && password_verify($password, $row['password_hash'])) {
+            $error = ban_message($row);                                    // the right password, but banned or paused
+        } elseif ($row && password_verify($password, $row['password_hash'])) {
             if (password_needs_rehash($row['password_hash'], PASSWORD_DEFAULT)) {
                 db()->prepare('UPDATE ' . T('users') . ' SET password_hash=? WHERE id=?')->execute([password_hash($password, PASSWORD_DEFAULT), $row['id']]);
             }
@@ -39,8 +48,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($_SESSION['csrf']);
             redirect(!empty($_SESSION['invite']) ? 'join.php' : 'lobby.php');      // came from an invite link: go to the room
         }
-        db()->prepare('INSERT INTO ' . T('login_attempts') . ' (ip, attempted_at) VALUES (?, ?)')->execute([$ip, $now]);
-        $error = 'Wrong username or password.';
+        if (!isset($error)) {
+            db()->prepare('INSERT INTO ' . T('login_attempts') . ' (ip, attempted_at) VALUES (?, ?)')->execute([$ip, $now]);
+            $error = 'Wrong username or password.';
+        }
     }
 }
 

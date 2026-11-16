@@ -225,6 +225,15 @@ with no move, or a minute with nobody online), the queue, open rooms and the lat
 - **Reload code**: clears PHP's OPcache, so newly uploaded files are used straight away.
 - **Restart everything**: all of the above at once.
 
+**Banning and pausing players** (*Players: ban or pause* on the same page): find a player by username or name, then
+**pause** them for 1 hour, 1 day, 1 week or 30 days, or **ban** them until you restore access, with an optional reason.
+They are signed out on their next request (an open battle or lobby sends them to the login page), can't log in, and
+are told why: "This account is paused by the site admin for another 2 h 59 min. Reason: …". Their tanks in running
+battles are withdrawn as if they had left (opponents play on and are scored normally), and they leave the queue and
+any private room. Rating, history and loadout are kept. Everyone currently banned or paused is listed with time left
+and a **Restore access** button. Admins and computer players can't be banned. Stored in `users.banned_until`
+(a ban is the year 9999), `ban_reason` and `banned_by`; each action is written to the PHP error log.
+
 The page also lists **Loadouts in ranked**: how often each loadout wins finished ranked matches, so a build that wins
 too often (more than 55% in 1 v 1, or 1.1× its fair share with more tanks, over 30+ matches) stands out. The skill
 numbers live in `includes/skills.php`.
@@ -277,7 +286,7 @@ api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
 api/move.php         → drive before you fire (server plans the route; doesn't end the turn)
-admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart");
+admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart"); ban or pause players;
                        how often each loadout wins ranked matches
 api/forfeit.php      → leave a match
 api/loadout.php      → your level, XP and loadout; save a loadout (presets, or a custom build of unlocked skills)

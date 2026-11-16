@@ -507,7 +507,7 @@ function check_timeout(int $mid): void
     } catch (Throwable $e) { $pdo->rollBack(); throw $e; }
 }
 
-function forfeit(int $mid, int $uid): bool
+function forfeit(int $mid, int $uid, string $reason = 'quit'): bool
 {
     $pdo = db();
     $pdo->beginTransaction();
@@ -519,7 +519,7 @@ function forfeit(int $mid, int $uid): bool
         foreach ($players as $p) if ($p['user_id'] === $uid && $p['alive']) $seat = $p['seat'];
         if ($seat === null) { $pdo->commit(); return false; }
         $players[$seat]['hp'] = 0; $players[$seat]['alive'] = false; $players[$seat]['death_turn'] = (int)$m['turn_no'];
-        $eid = add_event($m, $seat, 'forfeit', ['reason' => 'quit']);
+        $eid = add_event($m, $seat, 'forfeit', ['reason' => $reason]);   // quit, or 'suspended' by an admin
         $t = null;
         if ((int)$m['current_seat'] === $seat) {
             $t = Terrain::unpack($m['terrain'], $m['rules']['water']);
