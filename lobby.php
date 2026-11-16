@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__ . '/includes/bootstrap.php';
 require __DIR__ . '/includes/layout.php';
 require __DIR__ . '/includes/game.php';
-require __DIR__ . '/includes/ai.php';
+require_once __DIR__ . '/includes/ai.php';
 
 $u = require_login();
 $rank = rank_for((int)$u['rating']);
@@ -36,7 +36,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       </div>
       <?php endif; ?>
       <div class="tabs" role="tablist">
-        <button role="tab" data-tab="ranked" class="on" aria-selected="true">Ranked</button><button role="tab" data-tab="casual" aria-selected="false">Casual</button><button role="tab" data-tab="private" aria-selected="false">Private</button><button role="tab" data-tab="ai" aria-selected="false">vs AI</button>
+        <button role="tab" data-tab="ranked" class="on" aria-selected="true">Ranked</button><button role="tab" data-tab="casual" aria-selected="false">Casual</button><button role="tab" data-tab="private" aria-selected="false">Private</button><button role="tab" data-tab="ai" aria-selected="false">vs AI</button><button role="tab" data-tab="missions" aria-selected="false">Missions</button>
       </div>
 
       <div class="tab" data-pane="ranked">
@@ -72,6 +72,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
           </div>
           <p class="muted small" id="inviteMsg" hidden></p>
           <ul class="room-members" id="roomMembers"></ul>
+          <div class="room-mission" id="roomMission" hidden></div>
           <div class="room-set" id="roomSetIn"></div>
           <p class="muted small" id="roomHint"></p>
           <div class="room-btns"><button class="btn" id="roomStart" hidden>Start battle</button><button class="btn ghost" id="roomLeave">Leave room</button></div>
@@ -92,6 +93,13 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
         </div>
         <div class="seg" id="aiBots"><button data-n="1" class="on">1 AI</button><button data-n="2">2 AI</button><button data-n="3">3 AI</button></div>
         <button class="btn big" id="aiStart" <?= $active ? 'disabled' : '' ?>>Start battle</button>
+      </div>
+
+      <div class="tab" data-pane="missions" hidden>
+        <p class="muted">Co-op missions against computer tanks, alone or with up to 3 friends. Unrated. Earn up to 3 stars on each:
+          finish it, use few shots, take little damage. Each mission opens when you have a star on the one before.</p>
+        <div class="ms-head"><b id="msStars">★ 0 / 0</b><span class="muted small" id="msNote"></span></div>
+        <div id="missionList" class="ms-list"><p class="muted small">Loading missions…</p></div>
       </div>
 
       <div id="queueBox">
@@ -203,5 +211,5 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
     </div>
   </section>
 </main>
-<script src="assets/lobby.js?v=6"></script>
+<script src="assets/lobby.js?v=7"></script>
 <?php page_foot();

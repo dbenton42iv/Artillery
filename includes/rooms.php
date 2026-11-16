@@ -32,10 +32,12 @@ function room_settings(array $in): array
     $map = (string)($in['map'] ?? 'random');
     $items = (string)($in['items'] ?? 'all');
     $clock = (int)($in['turn_seconds'] ?? 40);
+    $mission = (int)($in['mission'] ?? 0);              // phase 5: a co-op mission instead of a battle
     return [
         'map' => $map === 'random' || isset(MAPS[$map]) ? $map : 'random',
         'items' => in_array($items, ['all', 'safe', 'off'], true) ? $items : 'all',
         'turn_seconds' => in_array($clock, ROOM_CLOCKS, true) ? $clock : 40,
+        'mission' => $mission > 0 ? $mission : null,
     ];
 }
 
@@ -147,7 +149,11 @@ function room_start(int $uid): array
     $st = $pdo->prepare('SELECT rm.user_id, u.rating FROM ' . T('room_members') . ' rm JOIN ' . T('users') . ' u ON u.id = rm.user_id WHERE rm.room_id = ? ORDER BY rm.joined_at');
     $st->execute([$r['id']]);
     $group = $st->fetchAll();
-    if (count($group) < 2) return ['error' => 'need_players'];
+    $mission = $r['settings']['mission'] ?? null;
+    if ($mission) {                                       // a co-op mission: 1 to 4 players, as the mission allows
+        $host = $pdo->prepare('SELECT * FROM ' . T('users') . ' WHERE id = ?'); $host->execute([$uid]);
+        if ($e = mission_playable($host->fetch(), mission_row((int)$mission), count($group))) return ['error' => $e];
+    } elseif (count($group) < 2) return ['error' => 'need_players'];
     foreach ($group as $g) if (active_match_for((int)$g['user_id'])) return ['error' => 'someone_in_match'];
     $lock = $pdo->quote('art3d_room_' . cfg('db')['prefix'] . $r['id']);
     if ((int)$pdo->query("SELECT GET_LOCK($lock, 3)")->fetchColumn() !== 1) return ['error' => 'busy'];
@@ -156,8 +162,11 @@ function room_start(int $uid): array
         $chk->execute([$r['id']]);
         if ($chk->fetchColumn() !== 'open') return ['error' => 'no_room'];
         $s = $r['settings'];
-        $map = $s['map'] === 'random' ? array_keys(MAPS)[mt_rand(0, count(MAPS) - 1)] : $s['map'];
-        $mid = create_match($group, count($group), $map, ['game_mode' => 'private', 'items' => $s['items'], 'turn_seconds' => $s['turn_seconds']]);
+        if ($mission) $mid = scenario_create($group, mission_row((int)$mission));
+        else {
+            $map = $s['map'] === 'random' ? array_keys(MAPS)[mt_rand(0, count(MAPS) - 1)] : $s['map'];
+            $mid = create_match($group, count($group), $map, ['game_mode' => 'private', 'items' => $s['items'], 'turn_seconds' => $s['turn_seconds']]);
+        }
         $pdo->prepare('UPDATE ' . T('rooms') . " SET status = 'started', match_id = ? WHERE id = ?")->execute([$mid, $r['id']]);
         return ['ok' => true, 'match_id' => $mid];
     } finally {
@@ -186,5 +195,10 @@ function room_status(int $uid): array
     $st->execute([$r['id']]);
     $members = array_map(fn($m) => ['name' => display_name($m), 'host' => (int)$m['id'] === (int)$r['host_id'], 'me' => (int)$m['id'] === $uid,
                                     'rank' => rank_for((int)$m['rating'])], $st->fetchAll());
-    return ['room' => ['code' => $r['code'], 'host' => (int)$r['host_id'] === $uid, 'settings' => $r['settings'], 'members' => $members, 'max' => ROOM_MAX]];
+    $info = null;
+    if (!empty($r['settings']['mission']) && ($mr = mission_row((int)$r['settings']['mission']))) {
+        $info = ['id' => $mr['id'], 'title' => $mr['title'], 'goal' => mission_goal_text($mr['def']), 'players' => $mr['def']['players'] ?? [1, 4],
+                 'map' => MAPS[$mr['def']['map'] ?? 'highlands']['name'] ?? ''];
+    }
+    return ['room' => ['code' => $r['code'], 'host' => (int)$r['host_id'] === $uid, 'settings' => $r['settings'], 'members' => $members, 'max' => ROOM_MAX, 'mission' => $info]];
 }

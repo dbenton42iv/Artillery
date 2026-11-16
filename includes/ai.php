@@ -21,6 +21,7 @@ const AI_LEVELS = [                         // aiming error (standard deviation)
 ];
 const AI_BOT_NAMES = ['CPU 1', 'CPU 2', 'CPU 3'];
 const AI_THINK = 2.5;                      // seconds an AI "aims" after the previous event has played out
+const AI_THINK_MISSION = 1.2;              // the same in Scenarios, where several computer tanks take turns in a row
 
 function ai_randn(): float
 {
@@ -36,7 +37,7 @@ function ai_trace(Terrain $t, array $players, array $objects, int $seat, float $
 {
     $y = deg2rad($yaw); $e = deg2rad($elev); $me = $players[$seat];
     $d = [cos($e) * sin($y), sin($e), -cos($e) * cos($y)];
-    $p = [$me['x'] + $d[0] * ENG_BARREL, $me['y'] + ENG_TURRET_H + $d[1] * ENG_BARREL, $me['z'] + $d[2] * ENG_BARREL];
+    $p = muzzle($me, $d);
     $sp = $power / 100 * ENG_VMAX; $v = [$d[0] * $sp, $d[1] * $sp, $d[2] * $sp];
     $g = (float)$rules['gravity']; $half = $t->half; $splash = !empty($rules['splash']);
     for ($n = 1; $n <= 2400; $n++) {
@@ -108,7 +109,7 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
         return [(float)$o['x'], (float)$o['z']];
     }
     if (!$burning && !($wasHit && rnd() < $L['dodge'])) return null;
-    $foes = array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat);
+    $foes = array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat && foes($p, $me));
     $near = fn(float $x, float $z) => min(array_map(fn($p) => hypot($p['x'] - $x, $p['z'] - $z), $foes) ?: [0.0]);
     $blk = drive_blockers($players, $objects, $seat); $best = null; $bestScore = -INF; $a0 = rnd() * M_PI * 2;
     for ($k = 0; $k < 16; $k++) {
@@ -131,6 +132,7 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
 function ai_decide(Terrain $t, array $players, array $objects, int $seat, array $wind, array $rules, string $level, array $fx, ?array $drive = null): array
 {
     $me = $players[$seat]; $L = AI_LEVELS[$level] ?? AI_LEVELS['veteran']; $item = $me['item'] ?? null;
+    if (!empty($rules['mission'])) return ai_mission_decide($t, $players, $objects, $seat, $wind, $rules, $L, $fx, $drive);
     // an invisible enemy: the AI knows only where it vanished, like a player would
     foreach ($fx['cloak'] ?? [] as $s => $c) if ((int)$s !== $seat && isset($players[(int)$s])) [$players[(int)$s]['x'], $players[(int)$s]['y'], $players[(int)$s]['z']] = $c['seen'];
     $mine = $fx['cloak'][$seat] ?? null;
@@ -261,7 +263,8 @@ function ai_act(int $mid, ?int $shown = null): void
     $st = $pdo->prepare('SELECT status, game_mode, rules, current_seat, turn_no, turn_deadline FROM ' . T('matches') . ' WHERE id = ?');
     $st->execute([$mid]);
     $m = $st->fetch();
-    if (!$m || $m['status'] !== 'active' || $m['game_mode'] !== 'ai') return;
+    if (!$m || $m['status'] !== 'active' || !in_array($m['game_mode'], ['ai', 'scenario'], true)) return;
+    $think = $m['game_mode'] === 'scenario' ? AI_THINK_MISSION : AI_THINK;   // missions have several computer tanks: keep them brisk
     $rules = json_decode((string)$m['rules'], true) ?: [];
     $seat = (int)$m['current_seat'];
     if (!isset($rules['bots'][$seat])) return;
@@ -271,14 +274,14 @@ function ai_act(int $mid, ?int $shown = null): void
     $ev->execute([$mid]);
     $recent = array_reverse($ev->fetchAll());
     if (!$recent) {
-        if (time() < (int)$m['turn_deadline'] - turn_secs($rules) + AI_THINK) return;     // first turn: let the page load
+        if (time() < (int)$m['turn_deadline'] - turn_secs($rules) + $think) return;     // first turn: let the page load
     } elseif ($shown === null || ($shown < (int)end($recent)['id'] && (int)end($recent)['ago'] < 25)) {
         if ($shown !== null) return;                       // the page is still replaying: wait (at most 25 s)
         // no report from the page: estimate. Events replay one after another, each starting when it arrives or
         // when the one before ends; wait until the last few would all have played out, plus a moment to "aim".
         $end = -INF;                                       // seconds relative to now (negative = in the past)
         foreach ($recent as $e) $end = max($end, -(float)$e['ago']) + ai_replay_secs($e['type'], json_decode($e['payload'], true) ?: []);
-        if ($end + AI_THINK > 0) return;
+        if ($end + $think > 0) return;
     }
     $lock = $pdo->quote('art3d_ai_' . cfg('db')['prefix'] . $mid);
     if ((int)$pdo->query("SELECT GET_LOCK($lock, 0)")->fetchColumn() !== 1) return;
@@ -287,7 +290,7 @@ function ai_act(int $mid, ?int $shown = null): void
         if ($m['status'] !== 'active' || (int)$m['current_seat'] !== $seat) return;
         $full = $pdo->prepare('SELECT terrain, objects, effects, wind_ang, wind_spd FROM ' . T('matches') . ' WHERE id = ?');
         $full->execute([$mid]); $row = $full->fetch();
-        $players = load_players($mid);
+        $players = load_players($mid, $rules);
         $t = Terrain::unpack($row['terrain'], $rules['water']);
         $objects = json_decode((string)$row['objects'], true) ?: [];
         $fx = (json_decode((string)$row['effects'], true) ?: []) + ['double' => null, 'moved' => null, 'fires' => [], 'cloak' => []];
@@ -295,7 +298,7 @@ function ai_act(int $mid, ?int $shown = null): void
         // drive at most once a turn, before anything else; "hit" = damaged by anything since this tank's own last action
         $drive = null;
         $mv = $fx['moved'];
-        if (move_budget($rules) > 0 && !($mv && (int)$mv['seat'] === $seat && (int)$mv['turn'] === $turn) && !($fx['double']['shots'] ?? 0)) {
+        if (move_budget($rules) > 0 && empty($rules['nodrive'][$seat]) && !($mv && (int)$mv['seat'] === $seat && (int)$mv['turn'] === $turn) && !($fx['double']['shots'] ?? 0)) {
             $drive = ['left' => move_budget($rules), 'hit' => ai_was_hit($mid, $seat)];
         }
         $plan = ai_decide($t, $players, $objects, $seat, wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], $fx, $drive);
@@ -313,8 +316,113 @@ function ai_act(int $mid, ?int $shown = null): void
                                                       wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], $fx);
             else return;
         }
-        take_shot($mid, $uid, ['turn_no' => $turn, 'yaw' => $plan['yaw'], 'elev' => $plan['elev'], 'power' => $plan['power'], 'weapon' => $plan['weapon']]);
+        take_shot($mid, $uid, ['turn_no' => $turn, 'yaw' => $plan['yaw'], 'elev' => $plan['elev'], 'power' => $plan['power'], 'weapon' => $plan['weapon']], $plan['ranging'] ?? null);
     } finally {
         $pdo->query("SELECT RELEASE_LOCK($lock)");
     }
+}
+
+/* =====================================================================
+ * Scenarios (phase 5): computer tanks fight as a team against the players. The same routine also drives the
+ * players' stand-ins in tests/mission_bench.php, so a mission can be checked for being winnable.
+ * ===================================================================== */
+
+/** Aim at point $T with the AI's error for its level ($L['err']). */
+function ai_aim(Terrain $t, array $players, array $objects, int $seat, array $T, array $wind, array $rules, array $L, string $wk, string $target): array
+{
+    $me = $players[$seat];
+    [$yaw, $elev, $pw] = ai_solve($t, $players, $objects, $seat, $T, $wind, $rules);
+    $s = $L['err'] * (float)sk($me, 'ai_aim', 1.0);
+    return ['yaw' => fmod(fmod($yaw + ai_randn() * $s, 360) + 360, 360), 'elev' => min(85.0, max(5.0, $elev + ai_randn() * $s * .5)),
+            'power' => min(max_power($me), max(10.0, $pw + ai_randn() * $s * .7)), 'weapon' => $wk, 'target' => $target];
+}
+
+/*
+ * Ranging (Scenarios): a gunner new to a target misses by more, and closes in shot by shot, the way a player does
+ * with the shot cards. The first shot at a target is 2.6× the level's usual error, then 1.6×, 1×, and 0.8× from the
+ * 4th on. Moving resets it: if the target or the shooter has driven more than 4 m since the last shot, it starts again.
+ * Each computer tank's memory is kept in FX 'ranging' (seat => [target key, shots, target x, z, own x, z]).
+ */
+const AI_RANGING = [2.6, 1.6, 1.0, 0.8];
+function ai_ranging(array $fx, int $seat, string $key, array $T, array $me): array
+{
+    $r = $fx['ranging'][$seat] ?? null; $n = 0;
+    if ($r && $r[0] === $key && hypot($r[2] - $T[0], $r[3] - $T[2]) < 4 && hypot($r[4] - $me['x'], $r[5] - $me['z']) < 4) $n = (int)$r[1];
+    return [AI_RANGING[min($n, count(AI_RANGING) - 1)], [$key, $n + 1, round($T[0], 2), round($T[2], 2), round((float)$me['x'], 2), round((float)$me['z'], 2)]];
+}
+
+function ai_mission_decide(Terrain $t, array $players, array $objects, int $seat, array $wind, array $rules, array $L, array $fx, ?array $drive): array
+{
+    $me = $players[$seat]; $item = $me['item'] ?? null; $goal = $rules['mission']['goal']['type'];
+    $enemy = ($me['team'] ?? 0) === ENEMY_TEAM;
+    $boss = $fx['boss'] ?? null;
+    $isBoss = $boss && (int)$boss['seat'] === $seat;
+    if ($isBoss && ($boss['wp']['radar']['hp'] ?? 0) <= 0) $L['err'] *= 2.2;   // radar gone: much worse aim
+    $midDouble = ($fx['double']['seat'] ?? -1) === $seat && ($fx['double']['shots'] ?? 0) > 0;
+    if (!$enemy) $L['dodge'] *= .5;                        // stand-ins for players (tests): driving off throws their own ranging away too
+    if ($drive && !$midDouble && $goal === 'crates' && $drive['left'] >= 3) {   // a mission's crates: drive to the nearest one that can be reached
+        $best = null;
+        foreach ($objects as $o) if ($o['type'] === 'crate' && $o['state'] === 'live' && !empty($o['mission'])) {
+            $d = hypot($o['x'] - $me['x'], $o['z'] - $me['z']);
+            if ($d > 45 || ($best && $d >= $best[2])) continue;
+            $r = drive_path($t, drive_blockers($players, $objects, $seat), (float)$me['x'], (float)$me['z'], (float)$o['x'], (float)$o['z'], $d * 2 + 4);
+            if (hypot($r['x'] - $o['x'], $r['z'] - $o['z']) < CRATE_PICK) $best = [(float)$o['x'], (float)$o['z'], $d];
+        }
+        if ($best && rnd() < ($enemy ? .6 : 1)) return ['move' => [$best[0], $best[1]]];
+    }
+    if ($drive && !$midDouble && ($to = ai_drive_plan($t, $players, $objects, $seat, $drive['left'], $drive['hit'], $fx, $L))) return ['move' => $to];
+    if ($item && !$midDouble && (POWERUPS[$item]['kind'] ?? '') !== 'shell') {
+        $use = match ($item) { 'repair' => $me['hp'] <= max_hp($me) - 30, 'shield' => $me['hp'] <= 85, 'relocate', 'cloak', 'flare' => false, default => true };
+        if ($use) return ['use' => true];
+    }
+    $lit = $fx['lit'] ?? [];
+    $night = !empty($rules['night']) && !$enemy;           // the players can't see unlit enemies; the computer tanks can
+    $cands = [];                                           // [point, kind, score]: lowest score wins
+    foreach ($players as $p) {
+        if (!$p['alive'] || !foes($p, $me)) continue;
+        $d = hypot($p['x'] - $me['x'], $p['z'] - $me['z']);
+        $score = $d + $p['hp'] * .6;
+        $T = [$p['x'], $p['y'] + 1 + (float)sk($p, 'hit_dy', 0.0), $p['z']];
+        if ($boss && (int)$boss['seat'] === $p['seat'] && !$enemy) {     // the Behemoth: go for a standing weak point
+            foreach ($boss['wp'] as $id => $w) if ($w['hp'] > 0) { $T = boss_wp_pos($p, $id, (float)$boss['face']); break; }
+        }
+        if (!$enemy && !empty($rules['goal_seats'][$p['seat']])) $score -= 60;   // a target tank
+        $kind = 'tank';
+        if ($night && empty($lit[$p['seat']])) {           // unseen: shoot where it was last seen, or light it up first
+            if ($seen = $fx['seen'][$p['seat']] ?? null) $T = [$seen[0], $seen[1] + 1, $seen[2]]; else $kind = 'dark';
+            $score += 15;
+        }
+        $cands[] = [$T, $kind, $score, 's' . $p['seat']];
+    }
+    foreach ($objects as $o) {
+        if ($o['type'] === 'crate' && $o['state'] === 'live' && !empty($o['mission']) && $goal === 'crates')
+            $cands[] = [[$o['x'], $o['y'] + .5, $o['z']], 'crate', hypot($o['x'] - $me['x'], $o['z'] - $me['z']) * ($enemy ? .9 : .6) - 20, 'o' . $o['id']];
+        if ($o['type'] === 'building' && $o['hp'] > 0) {
+            if (!$enemy && !empty($o['goal'])) $cands[] = [[$o['x'], $o['y'] + min(2.0, $o['h'] / 2), $o['z']], 'object', hypot($o['x'] - $me['x'], $o['z'] - $me['z']) * .7 - 40, 'o' . $o['id']];
+            if ($enemy && !empty($o['protect'])) $cands[] = [[$o['x'], $o['y'] + min(2.0, $o['h'] / 2), $o['z']], 'object', hypot($o['x'] - $me['x'], $o['z'] - $me['z']) * .8 + (rnd() < .5 ? -60 : 40), 'o' . $o['id']];
+        }
+    }
+    if (!$cands) return ai_aim($t, $players, $objects, $seat, [$me['x'] + 30, $me['y'], $me['z']], $wind, $rules, $L, 'shell', 'none');
+    usort($cands, fn($a, $b) => $a[2] <=> $b[2]);
+    // keep shooting at the target it has been ranging on, unless another is clearly better
+    $prev = $fx['ranging'][$seat][0] ?? null;
+    foreach ($cands as $c) if ($c[3] === $prev && $c[2] < $cands[0][2] + 25) { $cands = [$c]; break; }
+    [$T, $kind, , $key] = $cands[0];
+    if ($kind === 'dark') {                                // night: light it up first, or fire blind at where it might be
+        $T = [$T[0] + (rnd() - .5) * 16, $T[1], $T[2] + (rnd() - .5) * 16]; $T[1] = $t->heightAt($T[0], $T[2]);
+        if ((int)($fx['flare_ammo'][$seat] ?? 0) > 0) return ai_aim($t, $players, $objects, $seat, $T, $wind, $rules, $L, 'flare', 'flare');
+        $L['err'] *= 1.6;                                  // firing blind
+        $kind = 'tank';
+    }
+    $wk = 'shell';
+    if ($isBoss) $wk = ($boss['wp']['gun']['hp'] ?? 0) > 0 ? 'heavy' : 'cluster';    // main gun gone: cluster barrages
+    elseif ($item && (POWERUPS[$item]['kind'] ?? '') === 'shell' && $item !== 'earthmover' && $item !== 'flare' && $kind !== 'crate') $wk = $item;
+    elseif ($kind === 'object' && $me['ammo_heavy'] > 0 && rnd() < .5) $wk = 'heavy';
+    elseif ($kind === 'tank') {
+        $r = rnd();
+        if ($me['ammo_heavy'] > 0 && $r < .3) $wk = 'heavy'; elseif ($me['ammo_cluster'] > 0 && $r < .5) $wk = 'cluster';
+    }
+    [$k, $memo] = ai_ranging($fx, $seat, $key, $T, $me);
+    $L['err'] *= $k;
+    return ai_aim($t, $players, $objects, $seat, $T, $wind, $rules, $L, $wk, $kind) + ['ranging' => $memo];
 }

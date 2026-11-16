@@ -4,6 +4,7 @@ defined('ART3D') || exit;
 require_once __DIR__ . '/engine.php';
 require_once __DIR__ . '/migrate.php';
 require_once __DIR__ . '/cosmetics.php';
+require_once __DIR__ . '/scenario.php';
 ensure_schema();
 
 /* =====================================================================
@@ -17,8 +18,9 @@ ensure_schema();
  * (capped at ±800), so close ranks meet first and nobody waits forever.
  * Casual: first come, first served; a player who named a map only meets players who chose that map or "any".
  * ===================================================================== */
-const GAME_MODES = ['ranked' => 'Ranked', 'casual' => 'Casual', 'private' => 'Private', 'ai' => 'vs AI'];
-/*   ai       unrated, against computer players (includes/ai.php); ranked rules by default, fair crates */
+const GAME_MODES = ['ranked' => 'Ranked', 'casual' => 'Casual', 'private' => 'Private', 'ai' => 'vs AI', 'scenario' => 'Scenario'];
+/*   ai       unrated, against computer players (includes/ai.php); ranked rules by default, fair crates
+ *   scenario co-op missions against computer tanks (phase 5: includes/missions.php and scenario.php); unrated */
 const MM_BASE_WINDOW = 100, MM_GROWTH = 15, MM_MAX_WINDOW = 800, MM_STALE = 20, LOAD_GRACE = 10;
 
 function search_window(int $waited): int { return min(MM_MAX_WINDOW, MM_BASE_WINDOW + MM_GROWTH * $waited); }
@@ -267,7 +269,7 @@ function match_rules(array $m): array
             'wind_axis' => null, 'splash' => false, 'erupt_every' => 0, 'vent' => null, 'snow' => false, 'fall_mult' => 1.0, 'ranked' => true,
             'mode' => 'ranked', 'items' => 'off'];
 }
-function load_players(int $mid): array
+function load_players(int $mid, ?array $rules = null): array
 {
     $st = db()->prepare('SELECT * FROM ' . T('match_players') . ' WHERE match_id = ? ORDER BY seat');
     $st->execute([$mid]);
@@ -284,7 +286,22 @@ function load_players(int $mid): array
         $r['sk'] = skill_mods($r['loadout']); $r['max_hp'] = loadout_hp($r['loadout']);
         $out[$r['seat']] = $r;
     }
-    return $out;
+    return $rules ? seat_rules($out, $rules) : $out;
+}
+/**
+ * Scenarios (phase 5): what the match's rules say about each seat: its team, a computer tank's own hp, and the
+ * Behemoth's size (hit radius, gun height). Other matches have none of this, so their tanks are unchanged.
+ */
+function seat_rules(array $players, array $rules): array
+{
+    if (empty($rules['teams'])) return $players;
+    foreach ($players as $s => &$p) {
+        $p['team'] = (int)($rules['teams'][$s] ?? $s);
+        if (isset($rules['mods'][$s])) $p['sk'] = $rules['mods'][$s] + $p['sk'];
+        if (isset($rules['hp'][$s])) $p['max_hp'] = (int)$rules['hp'][$s];
+    }
+    unset($p);
+    return $players;
 }
 function save_players(int $mid, array $players): void
 {
@@ -351,6 +368,7 @@ function resolve_deaths(array &$players, int $turn): array
 /** One tank left, or (against the AI) no human tank left: nobody would be watching the computer play itself. */
 function battle_over(array $m, array $players): bool
 {
+    if (!empty($m['rules']['mission'])) return mission_outcome($m['rules'], $players, $m['objects'] ?? []) !== null;
     $alive = array_filter($players, fn($p) => $p['alive']);
     if (count($alive) <= 1) return true;
     $bots = $m['rules']['bots'] ?? [];
@@ -409,6 +427,7 @@ function save_match(array $m, ?Terrain $t = null, ?int $lastEvent = null): void
     $args = [$m['status'], $m['wind_ang'], $m['wind_spd'], $m['turn_no'], $m['current_seat'], $m['turn_deadline'], $m['winner_user_id'], $m['finished_at']];
     if ($t) { $sql .= ', terrain=?'; $args[] = $t->pack(); }
     $sql .= ', effects=?'; $args[] = json_encode(FX::$e, JSON_PRESERVE_ZERO_FRACTION);
+    if (!empty($m['rules_dirty'])) { $sql .= ', rules=?'; $args[] = json_encode($m['rules'], JSON_PRESERVE_ZERO_FRACTION); }
     if (!empty($m['objects_dirty'])) { $sql .= ', objects=?'; $args[] = json_encode($m['objects'], JSON_PRESERVE_ZERO_FRACTION); }
     if ($lastEvent) { $sql .= ', last_event_id=?'; $args[] = $lastEvent; }
     $sql .= ' WHERE id=?'; $args[] = $m['id'];
@@ -423,6 +442,7 @@ function finish_match(array &$m, array &$players): void
 {
     // the database clock, so finished_at compares cleanly with created_at (PHP and MySQL time zones can differ)
     $m['status'] = 'finished'; $m['finished_at'] = (string)db()->query('SELECT NOW()')->fetchColumn();
+    if (!empty($m['rules']['mission'])) { scenario_finish($m, $players); return; }
     $order = fn($p) => $p['alive'] ? PHP_INT_MAX : (int)$p['death_turn'];
     foreach ($players as &$p) {
         $p['placement'] = 1 + count(array_filter($players, fn($q) => $order($q) > $order($p)));
@@ -471,9 +491,11 @@ function award_xp(array $m, array $players): void
         if (isset($bots[$p['seat']])) continue;
         $sel->execute([$p['user_id']]); $u = $sel->fetch();
         if (!$u || (int)$u['is_bot']) continue;
-        $sole = $p['placement'] === 1 && (int)$m['winner_user_id'] === (int)$p['user_id'];
+        $res = $m['rules']['result'] ?? null;               // Scenarios: every player wins (or loses) together
+        $sole = $res ? $res['outcome'] === 'win' : $p['placement'] === 1 && (int)$m['winner_user_id'] === (int)$p['user_id'];
         $first = $sole && (string)$u['first_win_on'] !== $today;
         $gain = match_xp($p, in_array($p['seat'], $quit, true), $sole, $first);
+        if ($res && !in_array($p['seat'], $quit, true)) $gain = star_xp($gain, (int)($res['new_stars'][$p['seat']] ?? 0));
         $before = (int)$u['xp']; $after = $before + $gain['total'];
         $detail = $gain + ['before' => $before, 'after' => $after, 'level_before' => level_for($before), 'level_after' => level_for($after)];
         $mp->execute([$gain['total'], json_encode($detail), $m['id'], $p['seat']]);
@@ -493,7 +515,7 @@ function check_timeout(int $mid): void
     try {
         $m = lock_match($mid);
         if (!$m || $m['status'] !== 'active' || time() <= (int)$m['turn_deadline']) { $pdo->commit(); return; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = (int)$m['current_seat'];
         $players[$seat]['strikes']++;
         $type = 'skip';
@@ -516,7 +538,7 @@ function forfeit(int $mid, int $uid, string $reason = 'quit'): bool
     try {
         $m = lock_match($mid);
         if (!$m || $m['status'] !== 'active') { $pdo->commit(); return false; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = null;
         foreach ($players as $p) if ($p['user_id'] === $uid && $p['alive']) $seat = $p['seat'];
         if ($seat === null) { $pdo->commit(); return false; }
@@ -535,7 +557,8 @@ function forfeit(int $mid, int $uid, string $reason = 'quit'): bool
 }
 
 /** Validate and resolve a shot. Returns ['ok'=>true] or ['error'=>...]. */
-function take_shot(int $mid, int $uid, array $in): array
+/** $aiMemo: a computer tank's ranging memory (Scenarios), saved with the shot; never from a request. */
+function take_shot(int $mid, int $uid, array $in, ?array $aiMemo = null): array
 {
     $wk = (string)($in['weapon'] ?? 'shell');
     if (!isset(WEAPONS[$wk])) return ['error' => 'bad_weapon'];
@@ -551,11 +574,14 @@ function take_shot(int $mid, int $uid, array $in): array
         if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
         if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
         if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = (int)$m['current_seat'];
         if ($players[$seat]['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
         $power = min(max_power($players[$seat]), max(10.0, $power));
-        if (isset(POWERUPS[$wk])) {                      // a power-up shell: fired from the item slot
+        if ($wk === 'flare' && $players[$seat]['item'] !== 'flare') {   // night missions: flare shells (a Flare power-up is fired from the slot below)
+            if ((int)(FX::$e['flare_ammo'][$seat] ?? 0) <= 0) { $pdo->commit(); return ['error' => 'no_ammo']; }
+            FX::$e['flare_ammo'][$seat]--;
+        } elseif (isset(POWERUPS[$wk])) {                // a power-up shell: fired from the item slot
             if ($players[$seat]['item'] !== $wk) { $pdo->commit(); return ['error' => 'no_item']; }
             $players[$seat]['item'] = null;
             log_item($m, $seat, $wk, 'use');
@@ -565,6 +591,7 @@ function take_shot(int $mid, int $uid, array $in): array
             $players[$seat][$col]--;
         }
         $players[$seat]['strikes'] = 0;
+        if ($aiMemo !== null) FX::$e['ranging'][$seat] = $aiMemo;
         FX::$e['range'] = array_values(array_diff(FX::$e['range'], [$seat]));   // a Rangefinder lasts one shot
         $dbl = FX::$e['double'];
         $first = $dbl && $dbl['seat'] === $seat && $dbl['turn'] === (int)$m['turn_no'] && $dbl['shots'] === 0;
@@ -610,7 +637,7 @@ function use_item(int $mid, int $uid, array $in): array
         if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
         if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
         if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = (int)$m['current_seat']; $me = $players[$seat];
         if ($me['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
         $item = $me['item'];
@@ -651,7 +678,7 @@ function hold_fire(int $mid, int $uid, array $in): array
         if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
         if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
         if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = (int)$m['current_seat'];
         if ($players[$seat]['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
         if (!cloaked($seat)) { $pdo->commit(); return ['error' => 'not_cloaked']; }
@@ -690,10 +717,10 @@ function drive(int $mid, int $uid, array $in): array
         if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
         if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
         if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
-        $players = load_players($mid);
+        $players = load_players($mid, $m['rules']);
         $seat = (int)$m['current_seat'];
         if ($players[$seat]['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
-        if (move_budget($m['rules']) <= 0) { $pdo->commit(); return ['error' => 'no_driving']; }
+        if (move_budget($m['rules']) <= 0 || !empty($m['rules']['nodrive'][$seat])) { $pdo->commit(); return ['error' => 'no_driving']; }
         $dbl = FX::$e['double'];
         if ($dbl && $dbl['seat'] === $seat && $dbl['shots'] > 0) { $pdo->commit(); return ['error' => 'mid_double']; }
         $left = move_left($m, $seat);
@@ -706,7 +733,7 @@ function drive(int $mid, int $uid, array $in): array
         $ev['left'] = round(max(0.0, move_budget($m['rules']) - $used), 2);
         $players[$seat]['strikes'] = 0;                  // driving counts as being at the controls
         $players[$seat]['moved'] = ($players[$seat]['moved'] ?? 0) + $ev['used'];
-        if (cloaked($seat)) $ev['cloaked'] = true;        // other players get only "drove somewhere" (hide_cloaked)
+        if (cloaked($seat) || in_dark($m['rules'], $players[$seat])) $ev['cloaked'] = true;   // other players get only "drove somewhere" (hide_cloaked)
         $eid = add_event($m, $seat, 'move', $ev);
         foreach ($ev['pickup'] ?? [] as $c) { log_item($m, $seat, $c['item'], 'claim'); if ($c['lost']) log_item($m, $seat, $c['lost'], 'replaced'); }
         save_players($mid, $players);
@@ -790,10 +817,12 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
         FROM ' . T('match_players') . ' p JOIN ' . T('users') . ' u ON u.id = p.user_id WHERE p.match_id=? ORDER BY p.seat');
     $st->execute([$mid]);
     $now = time();
-    $bots = match_rules($m)['bots'] ?? [];
+    $rules = match_rules($m);
+    $bots = $rules['bots'] ?? [];
     FX::reset(json_decode((string)($m['effects'] ?? ''), true) ?: []);
     $live = $m['status'] === 'active';                  // once a battle is over, nothing is hidden
-    $players = array_map(function ($p) use ($now, $bots, $mySeat, $live) {
+    $myTeam = $mySeat === null ? null : (int)($rules['teams'][$mySeat] ?? $mySeat);
+    $players = array_map(function ($p) use ($now, $bots, $mySeat, $live, $rules, $myTeam) {
         $r = ['seat' => (int)$p['seat'], 'user_id' => (int)$p['user_id'], 'name' => display_name($p), 'hp' => (int)$p['hp'],
               'alive' => (bool)$p['alive'], 'x' => (float)$p['x'], 'y' => (float)$p['y'], 'z' => (float)$p['z'],
               'ammo' => ['shell' => null, 'heavy' => (int)$p['ammo_heavy'], 'cluster' => (int)$p['ammo_cluster']],
@@ -818,6 +847,18 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
             if ($r['seat'] !== $mySeat) [$r['x'], $r['y'], $r['z']] = array_map('floatval', $c['seen']);
         }
         if ($r['seat'] === $mySeat && $p['xp'] !== null) $r['xp'] = json_decode((string)$p['xp_detail'], true) ?: ['total' => (int)$p['xp']];
+        if (isset($rules['teams'])) {                   // Scenarios: teams, the computer tanks' names, kinds and hp, waves, the dark
+            $s = $r['seat']; $r['team'] = (int)$rules['teams'][$s];
+            if (isset($rules['names'][$s])) $r['name'] = $rules['names'][$s];
+            if (isset($rules['kinds'][$s])) $r['kind'] = $rules['kinds'][$s];
+            if (isset($rules['hp'][$s])) $r['max_hp'] = (int)$rules['hp'][$s];
+            if (!empty($rules['mods'][$s]['scale'])) $r['scale'] = (float)$rules['mods'][$s]['scale'];
+            if (!empty($rules['goal_seats'][$s])) $r['goal'] = true;
+            if (isset(FX::$e['reserve'][$s])) { $r['reserve'] = (int)FX::$e['reserve'][$s]; if ($live) [$r['x'], $r['y'], $r['z']] = [null, null, null]; }
+            if ($live && $r['alive'] && $r['team'] !== $myTeam && in_dark($rules, ['seat' => $s, 'team' => $r['team']])) {
+                $r['dark'] = true; [$r['x'], $r['y'], $r['z']] = [null, null, null];
+            }
+        }
         return $r;
     }, $st->fetchAll());
 
@@ -836,9 +877,9 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     ];
     FX::reset(json_decode((string)($m['effects'] ?? ''), true) ?: []);
     $out['effects'] = FX::pub($mySeat);
-    $rules = match_rules($m);
     $out['map'] = ['id' => $rules['map'], 'name' => MAPS[$rules['map']]['name'] ?? $rules['map'], 'blurb' => MAPS[$rules['map']]['blurb'] ?? '',
-                   'rules' => $rules, 'move' => move_budget($rules), 'regen' => regen_rate($rules), 'sudden_turn' => SD_TURN, 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
+                   'rules' => $rules, 'move' => move_budget($rules), 'regen' => regen_rate($rules), 'sudden_turn' => sd_turn($rules), 'sudden_wind' => SD_WIND, 'sudden_drain' => SD_DRAIN];
+    if (!empty($rules['mission'])) $out['mission'] = scenario_snapshot($mid, $rules, $players, $m['status']);
     if ($withTerrain) {
         $out['skills'] = skills_catalog();
         $out['terrain'] = base64_encode($m['terrain']);

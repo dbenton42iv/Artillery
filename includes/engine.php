@@ -4,6 +4,7 @@ defined('ART3D') || exit;
 require_once __DIR__ . '/maps.php';
 require_once __DIR__ . '/items.php';
 require_once __DIR__ . '/skills.php';
+require_once __DIR__ . '/missions.php';
 /*
  * Server-side game engine. The server is the referee: clients send only their aim (turret, angle,
  * power, weapon) and the server flies the shell, digs craters and applies damage. The browser
@@ -24,6 +25,8 @@ const WEAPONS = [
     'bunker'     => ['radius' => 7.0, 'dmg' => 60, 'split' => 0, 'tunnel' => 8.0],
     'napalm'     => ['radius' => 4.0, 'dmg' => 25, 'split' => 0, 'fire' => true],
     'earthmover' => ['radius' => 7.0, 'dmg' => 0,  'split' => 0, 'mound' => 5.0],
+    // phase 5: a flare shell lights up the dark (night missions): no blast, no crater
+    'flare'      => ['radius' => 0.0, 'dmg' => 0,  'split' => 0, 'flare' => FLARE_R],
 ];
 const BASE_WEAPONS = ['shell', 'heavy', 'cluster'];
 const LAVA_BOMB = ['radius' => 5.5, 'dmg' => 30, 'split' => 0];
@@ -616,8 +619,16 @@ function generate_map(string $mapId, int $players): array
     unset($o);
     $pos = array_map(fn($sp) => [$sp[0], $t->heightAt($sp[0], $sp[1]), $sp[1]], $spawns);
 
+    $rules = map_rules($mapId, $n, $extra);
+    return ['terrain' => $t, 'spawns' => $pos, 'objects' => $objects, 'rules' => $rules];
+}
+
+/** The rules stored on a match for a map (physics, wind, special rules, crates). */
+function map_rules(string $mapId, int $n, array $extra): array
+{
+    $R = MAPS[$mapId] ?? MAPS['highlands'];
     $windMax = (float)cfg('wind_max', 8) <= 0 ? 0.0 : $R['wind'][1];
-    $rules = [
+    return [
         'map' => $mapId, 'n' => $n, 'gravity' => $R['gravity'], 'water' => $R['water'],
         'wind_min' => min($R['wind'][0], $windMax), 'wind_max' => $windMax,
         'wind_axis' => isset($extra['wind_axis']) && !empty($R['wind_axis']) ? round($extra['wind_axis'], 6) : null,
@@ -630,7 +641,6 @@ function generate_map(string $mapId, int $players): array
         // phase 4: one crate per tank, near it ('centre' = the old single crate between the tanks; older matches)
         'crates' => cfg('crate_drops', 'paired') === 'centre' ? 'centre' : 'paired', 'crate_near' => max(8.0, (float)cfg('crate_near', CRATE_NEAR)),
     ];
-    return ['terrain' => $t, 'spawns' => $pos, 'objects' => $objects, 'rules' => $rules];
 }
 
 /** Starting wind for a match: [angle, speed]. */
@@ -645,9 +655,11 @@ function initial_wind(array $rules): array
 /** Sudden-death wind bonus for a given turn. */
 function sd_wind_bonus(array $rules, int $turn): float
 {
-    if ((float)$rules['wind_max'] <= 0 || $turn < SD_TURN) return 0.0;
-    return SD_WIND * ($turn - SD_TURN + 1);
+    if ((float)$rules['wind_max'] <= 0 || $turn < sd_turn($rules)) return 0.0;
+    return SD_WIND * ($turn - sd_turn($rules) + 1);
 }
+/** The turn sudden death starts: 30, or never in Scenarios (missions have their own round limits). */
+function sd_turn(array $rules): int { return (int)($rules['sd_turn'] ?? SD_TURN); }
 
 /** Shift the wind for the next turn: a random walk inside the map's range, plus any sudden-death bonus. */
 function next_wind(float &$ang, float &$spd, array $rules, int $oldTurn, int $newTurn): void
@@ -679,7 +691,7 @@ function hit_tank(array $players, array $p, ?int $owner, float $age): ?string
 {
     foreach ($players as $s => $pl) {
         if (!$pl['alive'] || ($owner !== null && $s === $owner && $age < .25)) continue;
-        if (sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1.1)) ** 2 + ($p[2] - $pl['z']) ** 2) < (float)sk($pl, 'hit_r', ENG_TANK_HIT)) return 'tank';
+        if (sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1.1 + (float)sk($pl, 'hit_dy', 0.0))) ** 2 + ($p[2] - $pl['z']) ** 2) < (float)sk($pl, 'hit_r', ENG_TANK_HIT)) return 'tank';
     }
     return null;
 }
@@ -813,6 +825,13 @@ function settle_crates(Terrain $t, array &$objects): void
     unset($o);
 }
 
+/** Where a shell leaves the barrel: turret height and barrel length (the Behemoth's gun sits higher and is longer). */
+function muzzle(array $me, array $d): array
+{
+    $th = (float)sk($me, 'turret_h', ENG_TURRET_H); $bl = (float)sk($me, 'barrel', ENG_BARREL);
+    return [$me['x'] + $d[0] * $bl, $me['y'] + $th + $d[1] * $bl, $me['z'] + $d[2] * $bl];
+}
+
 /**
  * Fly one shot. $players is keyed by seat: ['x','y','z','hp','alive','last_hit_by','damage_dealt'] and is updated in place.
  * Returns the replay record: projectiles (sampled paths + explosions), terrain ops and post-shot settling.
@@ -823,7 +842,7 @@ function simulate_shot(Terrain $t, array &$players, array &$objects, int $seat, 
     $w = shooter_weapon($wk, $me);
     $y = deg2rad($yaw); $e = deg2rad($elev);
     $d = [cos($e) * sin($y), sin($e), -cos($e) * cos($y)];
-    $o = [$me['x'] + $d[0] * ENG_BARREL, $me['y'] + ENG_TURRET_H + $d[1] * ENG_BARREL, $me['z'] + $d[2] * ENG_BARREL];
+    $o = muzzle($me, $d);
     $sp = $power / 100 * ENG_VMAX;
     $ops = [];
     $projs = fly($t, $players, $objects, [new_proj($o, [$d[0] * $sp, $d[1] * $sp, $d[2] * $sp], 0.0, false)], $w, $seat, $wind, $rules, $ops);
@@ -847,6 +866,7 @@ function apply_damage(array &$players, array &$victim, int $vseat, int $dmg, ?in
     }
     $lost = min($dmg, $victim['hp']);
     $victim['hp'] -= $lost;
+    if ($lost > 0 && isset(FX::$e['taken'])) FX::$e['taken'][$vseat] = (int)(FX::$e['taken'][$vseat] ?? 0) + $lost;   // Scenarios: for the stars
     if ($by !== null && ($lost > 0 || $abs > 0)) {
         $victim['last_hit_by'] = $by;
         if ($by !== $vseat) $players[$by]['damage_dealt'] += $lost;
@@ -856,6 +876,7 @@ function apply_damage(array &$players, array &$victim, int $vseat, int $dmg, ?in
 
 function explode_at(Terrain $t, array &$players, array &$objects, array $p, array $w, ?int $owner, bool $splash, array &$ops): array
 {
+    if (!empty($w['flare'])) return flare_burst($players, $p, (float)$w['flare'], $owner);   // phase 5: lights, nothing else
     $R = $w['radius'] * ($splash ? .6 : 1);
     $Rc = 0.0; $mound = !empty($w['mound']) && !$splash; $out = [];
     if ($mound) {                                                    // Earthmover: build up instead of digging
@@ -868,14 +889,20 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
     $reach = $R * 1.45; $hits = [];
     if ($w['dmg'] > 0) foreach ($players as $s => &$pl) {
         if (!$pl['alive']) continue;
-        $d = sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1)) ** 2 + ($p[2] - $pl['z']) ** 2);
-        if ($d < $reach) {
-            $hr = (float)sk($pl, 'hit_r', ENG_TANK_HIT);                // Low Profile: 2.1 m
-            $dmg = (int)round($w['dmg'] * ($d < $hr ? 1 : (1 - ($d - $hr) / ($reach - $hr)) ** .9));
+        // co-op (Scenarios): a teammate's shell doesn't hurt you (your own still does)
+        if ($owner !== null && $owner !== $s && isset($pl['team'], $players[$owner]['team']) && $pl['team'] === $players[$owner]['team']) continue;
+        $d = sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1 + (float)sk($pl, 'hit_dy', 0.0))) ** 2 + ($p[2] - $pl['z']) ** 2);
+        $hr = (float)sk($pl, 'hit_r', ENG_TANK_HIT);                    // Low Profile: 2.1 m; the Behemoth: 4.6 m
+        $reachT = max($reach, $hr + 1.0);
+        if ($d < $reachT) {
+            $dmg = (int)round($w['dmg'] * ($d < $hr ? 1 : (1 - ($d - $hr) / ($reachT - $hr)) ** .9));
             if ($dmg > 0 && $d < 3 && sk($pl, 'dug_in', false)) $dmg = (int)round($dmg * (float)sk($pl, 'dug_in', 1.0));   // Dug In: 10% less
+            $wp = $dmg > 0 ? weak_point_hit($pl, $s, $p, $dmg) : null;   // the Behemoth's weak points take double
+            if ($wp) $dmg *= 2;
             if ($dmg > 0) {
                 [$lost, $abs] = apply_damage($players, $pl, $s, $dmg, $owner);
                 $h = ['seat' => $s, 'dmg' => $lost]; if ($abs) $h['abs'] = $abs;
+                if ($wp) $h['wp'] = $wp;
                 $hits[] = $h;
             }
         }
@@ -893,7 +920,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
         $d = sqrt(($p[0] - $o['x']) ** 2 + ($p[1] - ($o['y'] + .8)) ** 2 + ($p[2] - $o['z']) ** 2);
         if ($d <= (float)($w['claim'] ?? CRATE_CLAIM) && $owner !== null) {   // Scavenger: 6 m
             $crates[] = open_crate($players, $o, $owner);
-        } elseif ($d < $R && !$mound) {
+        } elseif ($d < $R && !$mound && empty($o['mission'])) {        // a mission's crates are sturdy: only claiming opens them
             $o['state'] = 'destroyed';                               // wrecked unopened: its contents never existed
             $crates[] = ['id' => $o['id'], 'by' => null];
         }
@@ -930,6 +957,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
 function start_turn(Terrain $t, array &$players, array &$objects, array $rules, int $turn, ?int $prevSeat = null, ?int $seat = null): ?array
 {
     $ops = []; $out = ['turn' => $turn]; $did = false;
+    if (!empty($rules['mission'])) $did = mission_turn_start($t, $players, $objects, $rules, $turn, $prevSeat, $seat, $out) || $did;
 
     if ($prevSeat !== null && FX::$e['shields']) {
         $gone = [];
@@ -970,6 +998,7 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         foreach (FX::$e['fires'] as $f) {
             foreach ($players as $s => &$pl) {
                 if (!$pl['alive'] || hypot($pl['x'] - $f['x'], $pl['z'] - $f['z']) >= $f['r']) continue;
+                if ($f['owner'] !== null && $f['owner'] !== $s && isset($pl['team'], $players[$f['owner']]['team']) && $pl['team'] === $players[$f['owner']]['team']) continue;
                 [$lost, $abs] = apply_damage($players, $pl, $s, FIRE_DMG, $f['owner']);
                 $b = ['seat' => $s, 'dmg' => $lost, 'fire' => $f['id']]; if ($abs) $b['abs'] = $abs;
                 $burn[] = $b;
@@ -987,7 +1016,7 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         $ops[] = $t->fill(.25, .35, $t->water + .2, $skips);
         $out['snow'] = true; $did = true;
     }
-    if ($turn >= SD_TURN) {
+    if ($turn >= sd_turn($rules)) {
         $drain = [];
         foreach ($players as $s => &$pl) {
             if (!$pl['alive']) continue;
@@ -995,14 +1024,15 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
             $drain[] = ['seat' => $s, 'dmg' => $lost];
         }
         unset($pl);
-        $out['sudden'] = ['first' => $turn === SD_TURN, 'drain' => $drain, 'wind_bonus' => sd_wind_bonus($rules, $turn)];
+        $out['sudden'] = ['first' => $turn === sd_turn($rules), 'drain' => $drain, 'wind_bonus' => sd_wind_bonus($rules, $turn)];
         $did = true;
     }
     $out['ops'] = $ops;
     $out['falls'] = $did ? settle($t, $players, $rules) : [];
     settle_crates($t, $objects);
     // heal over time: the tank whose turn it is repairs a little, after this turn's damage, until sudden death
-    if ($seat !== null && $turn < SD_TURN && ($r = regen_rate($rules)) > 0 && isset($players[$seat])) {
+    // (in Scenarios only the players repair: computer tanks don't)
+    if ($seat !== null && $turn < sd_turn($rules) && ($r = regen_rate($rules)) > 0 && isset($players[$seat]) && !(!empty($rules['mission']) && isset($rules['bots'][$seat]))) {
         $me = &$players[$seat];
         if ($me['alive'] && $me['hp'] > 0 && $me['hp'] < max_hp($me)) {
             $heal = min($r, max_hp($me) - $me['hp']); $me['hp'] += $heal;
@@ -1010,8 +1040,11 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         }
         unset($me);
     }
+    if (!empty($rules['mission']) && $seat !== null) $did = mission_seat_start($players, $rules, $turn, $seat, $out) || $did;
     $every = max(1, (int)($rules['crate_every'] ?? CRATE_EVERY));
-    if ($turn % $every === 0) {
+    // Scenarios count rounds, not turns: the players' crates come at the start of every 4th round
+    $due = !empty($rules['mission']) ? isset($out['round']) && $out['round'] % MISSION_CRATE_ROUNDS === 0 : $turn % $every === 0;
+    if ($due && ($rules['crates'] ?? 'centre') !== 'none') {
         $cs = ($rules['crates'] ?? 'centre') === 'paired' ? drop_paired($t, $players, $objects, $rules, $turn)
             : (($c = drop_crate($t, $players, $objects, $rules, $turn)) ? [$c] : []);
         if ($cs) { $out['crates'] = $cs; $did = true; }
@@ -1166,7 +1199,8 @@ function drop_paired(Terrain $t, array $players, array &$objects, array $rules, 
     $waiting = [];
     foreach ($objects as $o) if ($o['type'] === 'crate' && $o['state'] === 'live' && isset($o['for'])) $waiting[(int)$o['for']] = true;
     // an invisible tank gets no crate this drop: where its crate lands would give it away
-    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']]) && !isset(FX::$e['cloak'][$p['seat']])));
+    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']]) && !isset(FX::$e['cloak'][$p['seat']])
+        && !(!empty($rules['mission']) && isset($rules['bots'][$p['seat']]))));   // Scenarios: crates for the players only
     if (!$seats) return [];
     $near = (float)($rules['crate_near'] ?? CRATE_NEAR);
     // one distance for everyone in this drop; spots each tank can drive to if possible, otherwise (a tank dug into

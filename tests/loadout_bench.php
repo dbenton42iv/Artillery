@@ -23,7 +23,7 @@ if (PHP_SAPI !== 'cli') exit;
 define('ART3D', true);
 $GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10, 'regen_per_turn' => 3];
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
-require dirname(__DIR__) . '/includes/ai.php';
+require_once dirname(__DIR__) . '/includes/ai.php';
 
 /** 'preset:gunner' or 'heavy+loader+scavenger' → loadout. */
 function key_loadout(string $k): array

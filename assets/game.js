@@ -15,6 +15,10 @@ const COLORS = [
   { hex: 0xe5484d, css: '#e5484d' }, { hex: 0x3e8ef7, css: '#3e8ef7' },
   { hex: 0xf5b400, css: '#f5b400' }, { hex: 0xb26cf5, css: '#b26cf5' }];
 const LAVA = { hex: 0xff6a1a, css: '#ff8a3a' };
+/* Scenarios (phase 5): computer tanks wear enemy colours, so the players' own four colours stay theirs. */
+const ENEMY_COLORS = ['#c0392b', '#d35400', '#a93226', '#b9770e', '#922b21', '#ca6f1e', '#a04000', '#cb4335', '#873600', '#b03a2e', '#9c640c', '#7b241c']
+  .map(c => ({ hex: parseInt(c.slice(1), 16), css: c }));
+const colorOf = p => p.team === 1 ? ENEMY_COLORS[(p.seat - S.P.filter(q => q.team !== 1).length + 12) % 12] || ENEMY_COLORS[0] : COLORS[p.seat % 4];
 const WEAPONS = {
   shell:   { name: 'Shell',   key: '1', size: .45 },
   heavy:   { name: 'Heavy',   key: '2', size: .7 },
@@ -22,7 +26,8 @@ const WEAPONS = {
   // power-up shells (fired from the item slot)
   bunker:     { name: 'Bunker Buster', size: .55 },
   napalm:     { name: 'Napalm',        size: .5 },
-  earthmover: { name: 'Earthmover',    size: .6 }};
+  earthmover: { name: 'Earthmover',    size: .6 },
+  flare:      { name: 'Flare',         size: .4 }};
 const WKEYS = ['shell', 'heavy', 'cluster'];
 /* Power-ups: mirrors includes/items.php. kind: instant (free), turn (ends the turn), shell (fire it). */
 const ITEMS = {
@@ -34,7 +39,7 @@ const ITEMS = {
   earthmover:  { name: 'Earthmover',     kind: 'shell',   icon: '⛰', color: '#b89466', tip: 'Builds a mound (7 m wide, 5 m high) instead of a crater' },
   double:      { name: 'Double Shot',    kind: 'instant', icon: '⁑', color: '#ffd34d', tip: 'Fire two shells this turn, each with its own aim' },
   rangefinder: { name: 'Rangefinder',    kind: 'instant', icon: '⌖', color: '#9be7c4', tip: 'Your aim arc shows the whole flight, wind included, for 1 shot' },
-  flare:       { name: 'Flare',          kind: 'instant', icon: '✷', color: '#fff3a0', tip: 'Night maps only' },
+  flare:       { name: 'Flare',          kind: 'shell',   icon: '✷', color: '#fff3a0', tip: 'Night missions: lights up 40 m for 2 rounds' },
   relocate:    { name: 'Relocate',       kind: 'turn',    icon: '⤧', color: '#e9a0ff', tip: 'Moves your tank 40 m or more to a random spot. Uses your turn' },
   cloak:       { name: 'Invisibility',   kind: 'instant', icon: '◌', color: '#b9b3ff', tip: 'Enemies lose sight of you for 2 rounds: drive unseen, Hold fire to stay hidden. Firing reveals you' },
 };
@@ -46,7 +51,7 @@ function ghost(P, on) {
   if (P.ghost === on) return; P.ghost = on;
   P.tank.group.traverse(o => { if (o.isMesh) { o.material.transparent = on; o.material.opacity = on ? .3 : 1; o.material.depthWrite = !on; o.castShadow = !on; } });
 }
-const MODE_NAMES = { ranked: 'RANKED', casual: 'CASUAL', private: 'PRIVATE', ai: 'VS AI' };
+const MODE_NAMES = { ranked: 'RANKED', casual: 'CASUAL', private: 'PRIVATE', ai: 'VS AI', scenario: 'MISSION' };
 const AI_NAMES = { rookie: 'Rookie', veteran: 'Veteran', ace: 'Ace' };
 const VMAX = 75, STEP = 1 / 120, PATH_EVERY = 4, TIME_SCALE = 1.45, TURRET_H = 2.05, BARREL = 3.2, D2R = Math.PI / 180;
 // set from the match's map when it loads
@@ -107,8 +112,11 @@ const THEMES = {
   lunar:       { top: 0x000000, hor: 0x08090d, fog: null,       sun: 0xffffff, sunI: 1.15, hemi: [0x9aa4b8, 0x101014, .22], water: null,     waterOp: 0,   pal: 'moon',   props: 'base', stars: true },
 };
 let TH = THEMES.highlands;
+/* Night missions: the map's own palette under a dark sky, moonlight and fog; flares and fires light it up. */
+const NIGHT = { top: 0x050914, hor: 0x16213a, fog: [120, 420], sun: 0x8fa6d8, sunI: .22, hemi: [0x5d6f9a, 0x0b0d14, .3], water: 0x0c1c2c, waterOp: .9, stars: true, night: true };
 function applyTheme() {
   TH = THEMES[MAP] || THEMES.highlands;
+  if (RULES && RULES.night) TH = { ...TH, ...NIGHT, stars: true };
   skyMat.uniforms.top.value.setHex(TH.top); skyMat.uniforms.bot.value.setHex(TH.hor);
   scene.fog = TH.fog ? new THREE.Fog(TH.hor, TH.fog[0] * MS, TH.fog[1] * MS) : null;
   sun.color.setHex(TH.sun); sun.intensity = TH.sunI;
@@ -123,8 +131,8 @@ function applyTheme() {
       p[i*3] = Math.cos(a)*r*1300; p[i*3+1] = Math.abs(u)*1300 + 20; p[i*3+2] = Math.sin(a)*r*1300; }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(p, 3));
     scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false })));
-    const earth = new THREE.Mesh(new THREE.SphereGeometry(60, 32, 16), new THREE.MeshBasicMaterial({ color: 0x3d78c0, fog: false }));
-    earth.position.set(700, 520, -900); scene.add(earth);
+    const earth = new THREE.Mesh(new THREE.SphereGeometry(60, 32, 16), new THREE.MeshBasicMaterial({ color: TH.night ? 0xe8ecf4 : 0x3d78c0, fog: false }));
+    earth.position.set(700, 520, -900); scene.add(earth);                      // the Earth from the Moon, or the moon at night
   }
 }
 
@@ -275,7 +283,52 @@ function buildObjects(list) {
   OBJ = [];
   for (const o of list) { if (o.type === 'crate') { if (o.state === 'live') addCrate(o, false); continue; } OBJ[o.id] = buildBuilding(o); }
 }
+/* Mission objects (phase 5): targets (a bunker, a bridge span, a radar post, fuel tanks), walls and a depot to protect.
+ * They are buildings to the engine (a box with hp that stops shells); only the look differs. Goals and the depot get a
+ * name tag with their hp. */
+function buildMissionObject(o) {
+  const g = new THREE.Group(), std = (c, x = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: .85, ...x });
+  const W = o.hw*2, D = o.hd*2, Hh = o.h; let mat;
+  const box = (w, h, d, m, x, y, z) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); g.add(b); return b; };
+  if (o.kind === 'wall') { mat = std(0x8d8676); box(W, Hh, D, mat, 0, Hh/2, 0);
+    for (let k = -W/2 + 1; k < W/2; k += 2.2) box(Math.min(1.2, W*.3), .8, Math.min(1.2, D*.3) + .2, mat, W > D ? k : 0, Hh + .4, W > D ? 0 : k); }
+  else if (o.kind === 'depot') { mat = std(0x6a7360); box(W, Hh, D, mat, 0, Hh/2, 0); box(W + .5, .5, D + .5, std(0x2f7a3a), 0, Hh + .25, 0); }
+  else if (o.style === 'span') {                                  // a bridge span: a deck on two piers
+    mat = std(0x7d7a72); box(W, .9, D, mat, 0, Hh - .45, 0);
+    for (const sx of [-1, 1]) box(1.2, Hh - .9, 1.2, std(0x6a665e), sx * (W/2 - 1), (Hh - .9)/2, 0);
+    for (const sx of [-1, 1]) box(.25, .9, D, std(0x4d4a44), sx * (W/2 - .15), Hh + .45, 0);
+  } else if (o.style === 'radar') { mat = std(0x7a8288); box(W, Hh*.5, D, mat, 0, Hh*.25, 0);
+    const dish = new THREE.Mesh(new THREE.SphereGeometry(Math.min(W, D)*.45, 16, 8, 0, Math.PI*2, 0, Math.PI/2.5), std(0xd8dde2, { side: THREE.DoubleSide }));
+    dish.position.y = Hh*.8; dish.rotation.x = .9; g.add(dish); }
+  else if (o.style === 'fuel') { mat = std(0x9a8a52);
+    for (const sx of [-1, 1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(Math.min(W, D)*.24, Math.min(W, D)*.24, Hh, 16), mat); c.position.set(sx * W/4, Hh/2, 0); g.add(c); } }
+  else { mat = std(0x6f6b62); box(W, Hh, D, mat, 0, Hh/2, 0); box(W*.7, .35, .2, std(0x111111), 0, Hh*.7, -D/2 - .05); }   // a bunker with a gun slit
+  if (o.goal || o.protect) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(Math.max(W, D)*.75, Math.max(W, D)*.75 + .5, 40), new THREE.MeshBasicMaterial({ color: o.protect ? 0x3ddc84 : 0xff4f6d, side: THREE.DoubleSide, transparent: true, opacity: .75 }));
+    ring.rotation.x = -Math.PI/2; ring.position.y = o.style === 'span' ? Hh + .1 : .3; g.add(ring);
+  }
+  g.position.set(o.x, o.y, o.z);
+  g.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  scene.add(g);
+  const O = { ...o, group: g, mat, tint: mat.color.clone(), gone: false };
+  if (o.goal || o.protect || o.name) { O.label = document.createElement('div'); O.label.className = 'tl obj-l'; $('#labels').appendChild(O.label); }
+  if (o.hp <= 0) { g.visible = false; O.gone = true; } else shade(O);
+  return O;
+}
+function updateObjLabels() {
+  for (const O of OBJ) {
+    if (!O || !O.label) continue;
+    const s0 = project(v3.set(O.x, O.y + O.h + 3, O.z));
+    if (!s0.vis || cam.dist > 190 * MS) { O.label.style.display = 'none'; continue; }
+    O.label.style.display = ''; O.label.style.left = s0.x + 'px'; O.label.style.top = s0.y + 'px';
+    const col = O.protect ? '#3ddc84' : O.goal ? '#ff6d84' : '#d8d2c4';
+    const html = O.gone ? `<div style="color:${col};opacity:.6">${esc(O.name || 'Target')} ✕</div>`
+      : `<div style="color:${col}">${O.goal ? '◎ ' : ''}${esc(O.name || (O.protect ? 'Depot' : 'Target'))}</div><div class="bar"><i style="width:${100 * O.hp / O.max}%;background:${col}"></i></div>`;
+    if (O.label.dataset.h !== html) { O.label.dataset.h = html; O.label.innerHTML = html; }
+  }
+}
 function buildBuilding(o) {
+  if (o.kind && o.kind !== 'ruin') return buildMissionObject(o);
   {
     const tex = winTex.clone(); tex.needsUpdate = true; tex.repeat.set(Math.max(1, Math.round(o.hw*2/4)), Math.max(1, Math.round(o.h/4)));
     const tint = new THREE.Color().setHSL(.08, .08, .55 + Math.random()*.15);
@@ -303,7 +356,7 @@ function damageObject(r) {
   spawnSmoke(pos, O.h*1.2, 3.5); spawnSmoke(pos.clone().setY(O.y + 2), O.h, 4.5); sndBoom(.8);
   spawnDebris(pos, Math.max(O.hw, O.hd)*2, 0x7a746a);
   AT.raise(VT, O.x, O.z, Math.max(O.hw, O.hd)*1.6, Math.min(3, O.h*.18), 2); updateTerrainMesh();
-  banner('Building down!', 1200);
+  banner(O.kind === 'wall' ? 'Wall breached!' : O.goal ? `${O.name || 'Target'} destroyed!` : O.protect ? 'The depot is gone!' : 'Building down!', 1400);
 }
 
 /* =====================================================================
@@ -453,7 +506,7 @@ function hullMaterial(color, paint) {
   }
   return new THREE.MeshStandardMaterial({ color: paint && paint.color ? new THREE.Color(paint.color) : color, roughness: .55, metalness: .25 });
 }
-function makeTank(color, cos) {
+function makeTank(color, cos, kind) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color, roughness: .55, metalness: .25 });
   const paint = hullMaterial(color, cos && cos.paint);
@@ -471,6 +524,18 @@ function makeTank(color, cos) {
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(model === 'twin' ? .14 : r0, model === 'twin' ? .18 : r1, len, 12), dark);
     barrel.rotation.x = -Math.PI/2; barrel.position.set(x, 0, -len/2); pivot.add(barrel);
     if (model === 'short') { const brake = new THREE.Mesh(new THREE.CylinderGeometry(.36, .36, .4, 12), dark); brake.rotation.x = -Math.PI/2; brake.position.z = -len; pivot.add(brake); }
+  }
+  if (kind === 'gun') {                                        // a dug-in gun: sandbags instead of tracks
+    hull.children.slice(2).forEach(m => m.visible = false);
+    const bags = new THREE.Mesh(new THREE.TorusGeometry(3.1, .75, 6, 18), new THREE.MeshStandardMaterial({ color: 0x8a7a58, roughness: 1 }));
+    bags.rotation.x = -Math.PI / 2; bags.position.y = .45; bags.scale.z = .7; hull.add(bags);
+  }
+  if (kind === 'behemoth') {                                   // radar mast and shield generator (its weak points are drawn on top)
+    const steel = new THREE.MeshStandardMaterial({ color: 0x3a3d40, roughness: .6, metalness: .5 });
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(.08, .12, 1.6, 6), steel); mast.position.set(-.95, 2.0, 1.3); hull.add(mast);
+    const dish = new THREE.Mesh(new THREE.CylinderGeometry(.5, .5, .08, 14), steel); dish.position.set(-.95, 2.75, 1.3); dish.rotation.x = 1.1; hull.add(dish);
+    const gen = new THREE.Mesh(new THREE.BoxGeometry(.9, .7, .9), steel); gen.position.set(1.1, 1.7, 1.7); hull.add(gen);
+    for (const sx of [-1, 1]) { const sk = new THREE.Mesh(new THREE.BoxGeometry(.25, .7, 4.4), steel); sk.position.set(sx*1.65, 1.2, 0); hull.add(sk); }
   }
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g);
@@ -854,16 +919,29 @@ function init(d) {
   initTerrain(decodeTerrain(d.terrain));
   buildVent();
   S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
+  S.mission = d.mission || null;
+  S.P = d.players.map(p => ({ seat: p.seat, team: p.team }));                // colorOf() needs the teams first
   S.P = d.players.map(p => {
-    const c = COLORS[p.seat], label = document.createElement('div');
+    const c = colorOf(p), label = document.createElement('div');
     label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div>${p.title ? `<div class="ttl">${esc(p.title)}</div>` : ''}<div class="bar"><i style="background:${c.css}"></i></div>`;
     $('#labels').appendChild(label);
-    const P = { ...p, color: c, tank: makeTank(c.hex, p.cos), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
+    const P = { ...p, color: c, tank: makeTank(c.hex, p.cos, p.kind), label, trails: [], elev: 45, dead: false };
+    if (p.x == null) { P.x = 0; P.y = -200; P.z = 0; }                         // a wave not here yet, or unseen in the dark
+    P.yaw = ((Math.atan2(-P.x, P.z) / D2R) + 360) % 360;
+    if (p.scale) P.tank.group.scale.setScalar(p.scale);                     // the Behemoth
     P.hullYaw = P.yaw; P.tank.hull.rotation.y = -P.yaw*D2R;
     return P;
   });
   buildObjects(d.objects || []);                    // after the tanks: paired crates show their tank's colour
-  props.build(TH.props, [...S.P.map(p => [p.x, p.z, 9]), ...OBJ.map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]), ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : [])]);
+  if (S.mission) {
+    buildMission(d);
+    // players start aimed at the enemy: the middle of what is visible to shoot at (targets, then enemy tanks)
+    const aims = [...OBJ.filter(o => o && o.goal && o.hp > 0), ...S.P.filter(q => isEnemy(q) && !hiddenTank(q))];
+    if (aims.length) { const ax = aims.reduce((t, q) => t + q.x, 0) / aims.length, az = aims.reduce((t, q) => t + q.z, 0) / aims.length;
+      for (const q of S.P) if (!isEnemy(q)) q.yaw = q.hullYaw = ((Math.atan2(ax - q.x, -(az - q.z)) / D2R) + 360) % 360; }
+  }
+  props.build(TH.props, [...S.P.filter(p => p.y > -100).map(p => [p.x, p.z, 9 * (p.scale || 1)]), ...OBJ.filter(Boolean).map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]),
+    ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : []), ...(S.mission && S.mission.convoy_path ? S.mission.convoy_path.map(q => [q[0], q[1], 8]) : [])]);
   const me = S.P[S.me];
   S.aim.yaw = me.yaw;
   $('#sPow').max = String(me.max_power || 100);                     // Fortified: 85
@@ -876,8 +954,14 @@ function init(d) {
 }
 function showMapIntro() {
   const m = S.map; if (!m) return;
-  $('#mapLine').textContent = m.blurb;
+  $('#mapLine').textContent = S.mission ? '' : m.blurb;
   if (S.match.turn > 1) return;
+  if (S.mission) {                                                             // a mission: its name and what to do
+    const el = $('#mapIntro'), ms = S.mission;
+    el.innerHTML = `<div class="mi-name">${esc(ms.title)}</div><div class="mi-blurb">${esc(ms.text)}</div><div class="mi-los"><div class="mi-lo">${esc(m.name)}${ms.night ? ' · night' : ''} · ${S.P.filter(q => q.team !== 1).length} player${S.P.filter(q => q.team !== 1).length > 1 ? 's' : ''}</div><div class="mi-lo">★ complete it · ★ ${ms.stars_rule.shots} shots or fewer each · ★ ${ms.stars_rule.damage} damage or less each</div></div>`;
+    el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, 6500);
+    return;
+  }
   const los = S.P.filter(q => q.loadout).map(q => `<div class="mi-lo"><b style="color:${q.color.css}">${esc(q.name)}</b> <span class="mi-ic">${loIcons(q.loadout)}</span> ${esc(loText(q.loadout))}${q.max_hp !== 100 ? ` <small>${q.max_hp} hp</small>` : ''}</div>`).join('');
   const el = $('#mapIntro'); el.innerHTML = `<div class="mi-name">${esc(m.name)}</div><div class="mi-blurb">${esc(m.blurb)}</div>${los ? `<div class="mi-los">${los}</div>` : ''}`;
   el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, los ? 6000 : 3600);
@@ -895,15 +979,20 @@ function applySnap(d) {
   for (const p of d.players) {
     const P = S.P[p.seat]; if (!P) continue;
     Object.assign(P, { bot: p.bot, hp: p.hp, ammo: p.ammo, item: p.item, online: p.online, strikes: p.strikes, placement: p.placement, damage: p.damage,
-                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z,
-                       loadout: p.loadout, max_hp: p.max_hp, max_power: p.max_power, arc: p.arc, spotter: p.spotter, level: p.level, xp: p.xp });
+                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank,
+                       loadout: p.loadout, max_hp: p.max_hp, max_power: p.max_power, arc: p.arc, spotter: p.spotter, level: p.level, xp: p.xp,
+                       reserve: p.reserve || 0, dark: !!p.dark });
+    if (p.x != null) { P.x = p.x; P.y = p.y; P.z = p.z; }                   // unseen tanks (night) and waves not yet here keep where they were drawn
+    if (p.reserve) { P.alive = false; continue; }
     if (!p.alive && !P.dead) setDead(P, false);
     P.alive = p.alive;
   }
   S.fx = d.effects || S.fx; syncFx();
+  if (d.mission) { S.mission = d.mission; syncMission(); }
   const me = S.P[S.me];
   if (me && me.ammo && me.ammo[S.aim.weapon] === 0) S.aim.weapon = 'shell';
-  if (me && ITEMS[S.aim.weapon] && me.item !== S.aim.weapon) S.aim.weapon = 'shell';
+  if (S.aim.weapon === 'flare' && !(S.fx && S.fx.flares > 0)) S.aim.weapon = 'shell';
+  if (me && ITEMS[S.aim.weapon] && S.aim.weapon !== 'flare' && me.item !== S.aim.weapon) S.aim.weapon = 'shell';
   if (S.match.status === 'active' && S.lastTurnSeen !== S.match.turn) {
     S.lastTurnSeen = S.match.turn; setDrive(false, true);
     const cur = S.P[S.match.seat];
@@ -913,7 +1002,7 @@ function applySnap(d) {
       for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q.seat === S.me);
       envTrails.forEach(t => t.line.visible = false);
     }
-    else if (cur) { banner(`${cur.name}'s turn`); camBehind(cur); }
+    else if (cur) { banner(`${cur.name}'s turn`); if (!hiddenTank(cur)) camBehind(cur); }
   }
   syncUI();
 }
@@ -1034,14 +1123,15 @@ function startEvent(e) {
     [P.x, P.y, P.z] = d.reveal; setCloak(e.seat, false); spawnSmoke(new THREE.Vector3(P.x, P.y + 2, P.z), 3, 1.4, 0xb9b3ff, 3);
     if (e.seat !== S.me) banner(`${P.name} reappears!`, 1500);
   }
-  if (d.aim && ITEMS[d.aim.weapon]) { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
+  if (d.aim && ITEMS[d.aim.weapon] && d.aim.weapon !== 'flare') { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
   if (d.double) banner(e.seat === S.me ? 'Double Shot: fire again!' : `${P.name}: Double Shot`, 1500);
   if (e.seat === S.me) recordShot(e);
   P.trails.forEach(t => t.dispose()); P.trails = [];
   for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q === P);
   S.playing = { kind: 'shot', e, P, owner: P, aim: d.aim, phase: 'turn', t: 0, T: 0, from: { yaw: P.yaw, elev: P.elev },
-                projs: prepProjs(d.projectiles), falls: d.falls, deaths: d.deaths, ops: d.ops.length };
-  if (e.seat !== S.me) camBehind(P);
+                projs: prepProjs(d.projectiles), falls: d.falls, deaths: d.deaths, ops: d.ops.length, dark: hiddenTank(P) };
+  if (e.seat !== S.me && !hiddenTank(P)) camBehind(P);
+  else if (hiddenTank(P)) { const L = d.projectiles[0].path, q = L[L.length - 1]; camAt(q[0], q[1], q[2], 70 * MS); }   // unseen: watch where it lands
   syncUI();
 }
 /* ---------- shot cards: your last 3 shots, so after a detour (a crate, a drive) you can go back to an aim ---------- */
@@ -1122,6 +1212,7 @@ function startItemEvent(e) {
 function startTurnEvent(e) {
   const d = e.data, msgs = [];
   envTrails.forEach(t => t.dispose()); envTrails = [];
+  if (S.mission) missionTurnEvent(d, msgs);
   for (const s of d.shield_end || []) setShield(s, false);
   for (const c of d.cloak_end || []) { const Q = S.P[c.seat]; [Q.x, Q.y, Q.z] = c.at; setCloak(c.seat, false);
     msgs.push(c.seat === S.me ? "You're visible again" : `${Q.name} is visible again`); }
@@ -1150,11 +1241,11 @@ function startTurnEvent(e) {
     popup(`+${d.regen.heal}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#7bd389');
   }
   if (msgs.length) banner(msgs.join(' '), 2200);
-  const only = d.regen && !projs0(d) && !d.crates && !d.sudden && !d.snow && !d.burn && !d.erupt && !(d.shield_end || []).length && !(d.fire_end || []).length;
+  const only = d.regen && !(S.mission && missionTurnBusy(d)) && !projs0(d) && !d.crates && !d.sudden && !d.snow && !d.burn && !d.erupt && !(d.shield_end || []).length && !(d.fire_end || []).length;
   const projs = prepProjs(d.bombs);
   S.playing = { kind: 'shot', e, P: null, owner: null, aim: null, phase: projs.length ? 'fly' : 'pause', t: 0, T: 0,
                 projs, falls: d.falls, deaths: d.deaths, ops: d.ops.length,
-                wait: d.crates ? 2.4 : d.sudden && d.sudden.first ? 1.6 : only ? .35 : d.snow && !projs.length ? .5 : d.burn ? 1.1 : .9 };
+                wait: d.crates || (d.arrive || []).length ? 2.4 : d.sudden && d.sudden.first ? 1.6 : only ? .35 : d.snow && !projs.length ? .5 : d.burn ? 1.1 : .9 };
   syncUI();
 }
 const projs0 = d => (d.bombs || []).length > 0;
@@ -1166,11 +1257,11 @@ function updateEvent(dt) {
   const P = pl.P;
   if (pl.phase === 'pause') { pl.t += dt; if (pl.t > pl.wait) { pl.phase = 'fly'; } return; }
   if (pl.phase === 'turn') {
-    pl.t += dt; const k = Math.min(1, pl.t / (P.seat === S.me ? .15 : .7)), s = k*k*(3 - 2*k);
+    pl.t += dt; const k = Math.min(1, pl.t / (P.seat === S.me || pl.dark ? .15 : .7)), s = k*k*(3 - 2*k);
     P.yaw = lerpAngle(pl.from.yaw, pl.aim.yaw, s); P.elev = pl.from.elev + (pl.aim.elev - pl.from.elev)*s;
     if (k >= 1) {
       pl.phase = 'fly'; pl.T = 0; sndFire();
-      const o = pl.projs[0].path[0], v = new THREE.Vector3(o[0], o[1], o[2]); addFlash(v, .6); spawnSmoke(v, 1.2, .6);
+      const o = pl.projs[0].path[0], v = new THREE.Vector3(o[0], o[1], o[2]); if (!pl.dark) { addFlash(v, .6); spawnSmoke(v, 1.2, .6); }
     }
     return;
   }
@@ -1192,7 +1283,9 @@ function updateEvent(dt) {
       }
       const local = pl.T - pr.t0, path = pr.path, ts = pr.ts, L = path.length;
       while (pr.seg < L - 1 && ts[pr.seg + 1] <= local) pr.seg++;
-      while (pr.pushed <= pr.seg) { const q = path[pr.pushed]; pr.trail.push(q[0], q[1], q[2]); pr.pushed++; }
+      const unseen = pl.dark && !pr.bomblet && local < pr.dur * .55;      // night: a shell from an unseen gun comes out of the dark
+      pr.mesh.visible = !unseen;
+      while (pr.pushed <= pr.seg) { const q = path[pr.pushed]; if (!unseen) pr.trail.push(q[0], q[1], q[2]); pr.pushed++; }
       if (local >= pr.dur || pr.seg >= L - 1) {
         const q = path[L - 1]; pr.mesh.position.set(q[0], q[1], q[2]);
         pr.done = true; scene.remove(pr.mesh); pr.mesh.geometry.dispose();
@@ -1229,6 +1322,8 @@ function updateEvent(dt) {
 }
 function boom(b, lava, style = 'standard') {
   const pos = new THREE.Vector3(b.x, b.y, b.z);
+  if (b.flare) { missionBoom(b); syncUI(); return; }                 // a flare shell: light, no blast
+  if (S.mission) missionBoom(b);
   if (b.splash) { spawnSplash(pos, b.vr); sndSplash(); }
   else if (b.mound) {                                   // Earthmover: the ground heaves up
     AT.raise(VT, b.x, b.z, b.vr, 5, 2); updateTerrainMesh();
@@ -1251,12 +1346,219 @@ function endEvent() {
   if (!S.queue.length && S.snap) applySnap(S.snap);
 }
 
+
+/* =====================================================================
+ * Scenarios (phase 5): waves parachuting in, night and flares, the convoy, the Behemoth's weak points, and the
+ * mission's goal and progress on the scoreboard. The server decides all of it; this draws what it says.
+ * ===================================================================== */
+const BOSS_WP = {                                           // mirrors BOSS_WP in includes/missions.php (hull frame: x right, y up, z back)
+  gun:    { name: 'Main gun',         off: [0, 3.4, -4.6], lost: 'It switches to cluster barrages' },
+  radar:  { name: 'Radar mast',       off: [-2, 5.8, 2.8], lost: 'Its aim gets much worse' },
+  shield: { name: 'Shield generator', off: [2.3, 3.1, 3.6], lost: 'Its shield stops coming back' } };
+const MI = { convoy: null, wp: {}, glows: new Map(), seen: new Map(), lights: [] };
+const isEnemy = P => P && P.team === 1;
+const hiddenTank = P => !P.dead && S.match && S.match.status === 'active' && (P.reserve > 0 || P.dark);
+function wpWorld(P, id) {
+  const [lx, ly, lz] = BOSS_WP[id].off, a = ((S.fx.boss && S.fx.boss.face) || 0) * D2R;
+  return new THREE.Vector3(P.x + lx*Math.cos(a) - lz*Math.sin(a), P.y + ly, P.z + lx*Math.sin(a) + lz*Math.cos(a));
+}
+function buildMission(d) {
+  const ms = S.mission;
+  // the convoy: three trucks on a marked road, and the point it must not reach
+  if (ms.convoy_path) {
+    const path = ms.convoy_path.map(q => new THREE.Vector3(q[0], 0, q[1])), cum = [0];
+    for (let k = 1; k < path.length; k++) cum.push(cum[k-1] + path[k].distanceTo(path[k-1]));
+    const pts = [];
+    for (let s0 = 0; s0 <= cum[cum.length-1]; s0 += 2) { const q = alongPath(path, cum, s0); pts.push(new THREE.Vector3(q.x, heightAt(q.x, q.z) + .4, q.z)); }
+    const road = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0xff7a3a, dashSize: 2.5, gapSize: 2, transparent: true, opacity: .85 }));
+    road.computeLineDistances(); scene.add(road);
+    const end = path[path.length-1], ring = new THREE.Mesh(new THREE.RingGeometry(3.5, 4.3, 32), new THREE.MeshBasicMaterial({ color: 0xff5a2a, side: THREE.DoubleSide, transparent: true, opacity: .8 }));
+    ring.rotation.x = -Math.PI/2; ring.position.set(end.x, heightAt(end.x, end.z) + .3, end.z); scene.add(ring);
+    const trucks = [0, 1, 2].map(k => {
+      const g = new THREE.Group(), body = new THREE.MeshStandardMaterial({ color: k ? 0x5b5f4a : 0x6a4a3a, roughness: .8 });
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 1.8), body); cab.position.set(0, 1.4, -2); g.add(cab);
+      const bed = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.2, 4), new THREE.MeshStandardMaterial({ color: 0x4a4f3c, roughness: .9 })); bed.position.set(0, 1.6, 1.1); g.add(bed);
+      for (const z of [-2, 1.6]) for (const x of [-1.15, 1.15]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(.5, .5, .4, 10), new THREE.MeshStandardMaterial({ color: 0x1d1d1d })); w.rotation.z = Math.PI/2; w.position.set(x, .5, z); g.add(w); }
+      g.traverse(o => { if (o.isMesh) o.castShadow = true; }); scene.add(g); return g;
+    });
+    const label = document.createElement('div'); label.className = 'tl crate-l'; label.innerHTML = '<div style="color:#ff8a4a">Convoy</div>'; $('#labels').appendChild(label);
+    MI.convoy = { path, cum, trucks, label, d: (S.fx.convoy && S.fx.convoy.d) || 0, shown: (S.fx.convoy && S.fx.convoy.d) || 0 };
+  }
+  // the Behemoth: its hull faces the way the server says, and its weak points glow
+  if (S.fx.boss) {
+    const B = S.P[S.fx.boss.seat]; B.hullYaw = S.fx.boss.face; B.yaw = S.fx.boss.face;
+    for (const id of Object.keys(BOSS_WP)) {
+      const m = new THREE.Mesh(new THREE.OctahedronGeometry(.75, 0), new THREE.MeshBasicMaterial({ color: 0xffd34d }));
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(1.25, .08, 6, 24), new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: .7 }));
+      m.add(ring); scene.add(m);
+      const label = document.createElement('div'); label.className = 'tl wp-l'; $('#labels').appendChild(label);
+      MI.wp[id] = { mesh: m, ring, label };
+    }
+  }
+  if (RULES.night) for (const P of S.P) if (!isEnemy(P)) {                    // your own tanks carry a lamp
+    const l = new THREE.PointLight(0xffe2b0, .9, 22, 2); scene.add(l); MI.lights.push({ P, l });
+  }
+  syncMission();
+}
+function alongPath(path, cum, dd) {
+  let k = 1; while (k < path.length - 1 && cum[k] < dd) k++;
+  const a = path[k-1], b = path[k], seg = cum[k] - cum[k-1] || 1, u = clamp((dd - cum[k-1]) / seg, 0, 1);
+  return { x: a.x + (b.x - a.x)*u, z: a.z + (b.z - a.z)*u, ang: Math.atan2(b.x - a.x, -(b.z - a.z)) };
+}
+/** Flares that are still burning, and where unseen enemies were last seen (from the server's effects). */
+function syncMission() {
+  const fx = S.fx || {};
+  const ids = new Set((fx.glow || []).map(g => g.id));
+  for (const id of [...MI.glows.keys()]) if (!ids.has(id)) removeGlow(id);
+  for (const g of fx.glow || []) addGlow(g, false);
+  const seen = fx.seen || {};
+  for (const [seat, M] of MI.seen) if (!seen[seat] || !S.P[seat] || !S.P[seat].dark || S.P[seat].dead) { scene.remove(M.mesh); M.label.remove(); MI.seen.delete(seat); }
+  for (const k of Object.keys(seen)) {
+    const P = S.P[+k]; if (!P || !P.dark || P.dead) continue;
+    let M = MI.seen.get(+k);
+    if (!M) {
+      const mesh = new THREE.Mesh(new THREE.RingGeometry(2.2, 2.7, 24), new THREE.MeshBasicMaterial({ color: P.color.hex, side: THREE.DoubleSide, transparent: true, opacity: .55, depthWrite: false }));
+      mesh.rotation.x = -Math.PI/2; scene.add(mesh);
+      const label = document.createElement('div'); label.className = 'tl crate-l'; $('#labels').appendChild(label);
+      M = { mesh, label }; MI.seen.set(+k, M);
+    }
+    const q = seen[k]; M.mesh.position.set(q[0], q[1] + .3, q[2]); M.at = q;
+    M.label.innerHTML = `<div style="color:${P.color.css};opacity:.85">${esc(P.name)}? <small>last seen</small></div>`;
+  }
+  if (MI.convoy && fx.convoy) MI.convoy.d = fx.convoy.d;
+}
+/** A flare: a bright light that drifts down over the area it lights, and a faint pool of light on the ground. */
+function addGlow(g, fresh) {
+  if (MI.glows.has(g.id)) return;
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(.6, 10, 8), new THREE.MeshBasicMaterial({ color: 0xfff6c8 })));
+  const light = new THREE.PointLight(0xfff0c0, TH.night ? 3 : 1.1, g.r * 2.6, 1.6); group.add(light);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(g.r, 40), new THREE.MeshBasicMaterial({ color: 0xfff0b0, transparent: true, opacity: .08, depthWrite: false }));
+  disc.rotation.x = -Math.PI/2; disc.position.set(g.x, heightAt(g.x, g.z) + .5, g.z);
+  group.position.set(g.x, g.y + 28, g.z); scene.add(group); scene.add(disc);
+  MI.glows.set(g.id, { group, disc, light, g, t: fresh ? 0 : 99 });
+}
+function removeGlow(id) { const G = MI.glows.get(id); if (!G) return; scene.remove(G.group); scene.remove(G.disc); MI.glows.delete(id); }
+function updateMission(dt, time) {
+  for (const G of MI.glows.values()) {                       // drift down from 28 m above the burst to 14 m, then hang there
+    G.t += dt; G.group.position.y = G.g.y + 28 - 14 * Math.min(1, G.t / 3);
+    G.light.intensity = (TH.night ? 3 : 1.1) * (.85 + .15*Math.sin(time*13 + G.g.id));
+  }
+  for (const { P, l } of MI.lights) { l.visible = !P.dead; l.position.set(P.x, P.y + 3, P.z); }
+  const C = MI.convoy;
+  if (C) {
+    C.shown += (C.d - C.shown) * Math.min(1, dt * 1.6);
+    C.trucks.forEach((g, k) => { const q = alongPath(C.path, C.cum, Math.max(0, C.shown - k * 7)); g.position.set(q.x, heightAt(q.x, q.z), q.z); g.rotation.y = -q.ang; });
+    const t0 = C.trucks[0].position, s = project(v3.set(t0.x, t0.y + 5, t0.z));
+    if (!s.vis) C.label.style.display = 'none'; else { C.label.style.display = ''; C.label.style.left = s.x + 'px'; C.label.style.top = s.y + 'px'; }
+  }
+  const b = S.fx && S.fx.boss;
+  if (b) {
+    const B = S.P[b.seat];
+    for (const id of Object.keys(MI.wp)) {
+      const W = MI.wp[id], w = b.wp[id] || { hp: 0, max: 1 }, up = w.hp > 0 && !B.dead;
+      const pos = wpWorld(B, id); W.mesh.position.copy(pos); W.mesh.rotation.y += dt * 1.5; W.ring.rotation.x = time * 2;
+      W.mesh.material.color.setHex(up ? (w.hp / w.max > .5 ? 0xffd34d : 0xff7a2a) : 0x2a2a2a); W.ring.visible = up;
+      W.mesh.scale.setScalar(up ? 1 + .12*Math.sin(time*5) : .6);
+      const s = project(v3.set(pos.x, pos.y + 1.6, pos.z));
+      if (!s.vis || cam.dist > 170 * MS || B.reserve) W.label.style.display = 'none';
+      else { W.label.style.display = ''; W.label.style.left = s.x + 'px'; W.label.style.top = s.y + 'px';
+        W.label.innerHTML = up ? `<div>${BOSS_WP[id].name}</div><div class="bar"><i style="width:${100*w.hp/w.max}%;background:#ffd34d"></i></div>` : `<div style="opacity:.6">${BOSS_WP[id].name} ✕</div>`; }
+    }
+  }
+  for (const M of MI.seen.values()) {
+    const s = project(v3.set(M.at[0], M.at[1] + 3, M.at[2]));
+    if (!s.vis) M.label.style.display = 'none'; else { M.label.style.display = ''; M.label.style.left = s.x + 'px'; M.label.style.top = s.y + 'px'; }
+    M.mesh.material.opacity = .35 + .25*Math.sin(time*3);
+  }
+}
+/** Turn events in a mission: a new round, arrivals, the convoy, flares burning out, the Behemoth's shield. Returns messages. */
+function missionTurnEvent(d, msgs) {
+  if (d.round) msgs.push(`Round ${d.round}`);
+  for (const a of d.arrive || []) {
+    const P = S.P[a.seat]; P.reserve = 0; P.alive = true; P.dead = false; P.dark = !!(RULES.night); P.hp = a.hp;
+    P.x = a.at[0]; P.z = a.at[2]; P.reloc = { t: 0, to: a.at }; P.y = a.at[1] + 40;
+    P.yaw = P.hullYaw = ((Math.atan2(-P.x, P.z) / D2R) + 360) % 360;
+  }
+  if ((d.arrive || []).length) {
+    msgs.push(d.arrive.length > 1 ? `${d.arrive.length} enemy tanks parachute in!` : `${S.P[d.arrive[0].seat].name} parachutes in!`);
+    if (!RULES.night) { const a = d.arrive[0].at; camAt(a[0], a[1], a[2], 80*MS); }
+  }
+  if (d.convoy && MI.convoy) { MI.convoy.d = d.convoy.d; if (d.convoy.done) msgs.push('The convoy got through!'); }
+  for (const id of d.glow_end || []) removeGlow(id);
+  for (const s0 of d.lit_end || []) { const P = S.P[s0]; if (P && RULES.night && !P.dead) P.dark = true; }
+  if (d.boss_shield != null) { setShield(d.boss_shield, true); shieldHit(d.boss_shield); msgs.push('The Behemoth raises its shield'); }
+  if (d.enrage != null && !S.enraged) { S.enraged = true; msgs.push('The Behemoth is enraged: two shots a turn!'); }
+}
+const missionTurnBusy = d => d.round || (d.arrive || []).length || d.convoy || d.boss_shield != null || d.enrage != null;
+/** Hits on the Behemoth's weak points, and what a flare lit up. */
+function missionBoom(b) {
+  for (const h of b.hits || []) if (h.wp && S.fx.boss) {
+    const B = S.P[h.seat], w = S.fx.boss.wp[h.wp.id]; if (w) w.hp = h.wp.hp;
+    const pos = wpWorld(B, h.wp.id);
+    popup(`${BOSS_WP[h.wp.id].name} ×2`, pos.clone().setY(pos.y + 2.5), '#ffd34d');
+    if (h.wp.down) { spawnExplosion(pos, 5, 0xffd34d); spawnSmoke(pos, 3, 6, 0x2a2a2a, 3); banner(`${BOSS_WP[h.wp.id].name} destroyed! ${BOSS_WP[h.wp.id].lost}`, 2600); }
+  }
+  if (b.flare) {
+    addGlow(b.flare, true); noise(.8, 2400, .2, .8);
+    const lit = (b.flare.lit || []).map(s0 => S.P[s0]).filter(Boolean);
+    banner(lit.length ? `Lit up: ${lit.map(q => q.name).join(', ')}` : 'Flare: nothing there', 1800);
+  }
+}
+/** The mission's line on the scoreboard: goal, round, and what's left. */
+function missionStatus() {
+  const ms = S.mission; if (!ms) return '';
+  const bits = [];
+  const lim = ms.rounds || ms.limit;
+  bits.push(`<b>Round ${ms.round}${lim ? ` of ${lim}` : ''}</b>`);
+  if (ms.targets) bits.push(`Targets ${ms.targets[0]}/${ms.targets[1]}`);
+  if (ms.crates) bits.push(`Crates ${ms.crates[0]}/${ms.crates[1]}${ms.crates[2] ? ` · enemy ${ms.crates[2]}` : ''}`);
+  if (ms.convoy) { const left = Math.max(0, ms.convoy[1] - ms.convoy[0]); bits.push(`Convoy ${Math.round(100 * ms.convoy[0] / ms.convoy[1])}%${left > 0 ? ` · arrives in ${Math.ceil(left / ms.convoy[2])} round${Math.ceil(left / ms.convoy[2]) > 1 ? 's' : ''}` : ''}`); }
+  if (ms.goal !== 'destroy_targets' || ms.enemies) bits.push(`Enemies ${ms.enemies}${ms.incoming ? ` · ${ms.incoming} more coming${ms.next_wave ? ` (round ${ms.next_wave})` : ''}` : ''}`);
+  return `<div class="mgoal">${esc(ms.text)}</div><div class="mprog">${bits.join(' · ')}</div>`;
+}
+/** Scoreboard rows in a mission: the players in full, the enemies compact, waves still to come as one line. */
+function missionRows(m) {
+  const row = q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
+    <div class="sw" style="background:${q.color.css}"></div>
+    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}<i class="on${q.online ? '' : ' off'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh">◍</span>' : ''}</div>
+    <div class="wins"><span class="rk">${q.hp}/${maxHp(q)}</span></div>
+    <div class="hp"><i style="width:${hpPct(q)}%;background:${hpPct(q) > 50 ? '#7bd389' : hpPct(q) > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`;
+  const foes = S.P.filter(q => isEnemy(q) && !q.reserve);
+  const erow = q => `<div class="erow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}" title="${esc(q.name)}: ${q.dead ? 'destroyed' : q.dark ? 'unseen' : q.hp + ' hp'}">
+    <i class="sw" style="background:${q.color.css}"></i><span class="en">${q.goal ? '◎ ' : ''}${esc(q.name)}${q.dark && !q.dead ? ' <small>unseen</small>' : ''}</span>
+    <span class="eh"><i style="width:${hpPct(q)}%"></i></span></div>`;
+  const res = S.P.filter(q => isEnemy(q) && q.reserve > 0 && !q.dead);
+  const waves = {}; for (const q of res) waves[q.reserve] = (waves[q.reserve] || 0) + 1;
+  const wl = Object.keys(waves).sort((a, b) => a - b).map(r => `${waves[r]} in round ${r}`).join(' · ');
+  return S.P.filter(q => !isEnemy(q)).map(row).join('') + `<div class="egrid">${foes.map(erow).join('')}</div>` + (wl ? `<div class="waves">Incoming: ${wl}</div>` : '');
+}
+function missionEnd() {
+  const ms = S.mission, r = ms.result, me = S.P[S.me];
+  if (!r) return false;
+  const won = r.outcome === 'win';
+  $('#eTitle').innerHTML = won ? 'Mission complete!' : r.outcome === 'ended' ? 'Mission ended by the site admin' : 'Mission failed';
+  const st = r.stars || [false, false, false];
+  const crit = [['Complete the mission', st[0]], [`${ms.stars_rule.shots} shots or fewer each (you: ${r.shots})`, st[1]], [`${ms.stars_rule.damage} damage or less each (you: ${r.taken})`, st[2]]];
+  const stars = `<div class="stars">${st.map(x => `<span class="${x ? 'on' : ''}">★</span>`).join('')}</div>`
+    + `<div class="crit">${crit.map(([t, ok]) => `<div class="${ok ? 'ok' : ''}">${ok ? '✓' : '·'} ${esc(t)}</div>`).join('')}</div>`
+    + (ms.test ? '<div class="unrated">Test play: no progress or XP saved.</div>' : '');
+  const rows = S.P.filter(q => !isEnemy(q)).map(p => `<tr><td style="color:${p.color.css};font-weight:700">${esc(p.name)}${p.seat === S.me ? ' <small style="color:var(--dim)">YOU</small>' : ''}</td><td>${p.kills}</td><td>${p.damage}</td><td>${p.dead ? 'destroyed' : p.hp + ' hp'}</td></tr>`).join('');
+  $('#eTable').innerHTML = `<tr><td colspan="4">${esc(ms.title)} · round ${r.round}</td></tr><tr><td colspan="4">${stars}</td></tr><tr><th>COMMANDER</th><th>KILLS</th><th>DAMAGE</th><th>TANK</th></tr>${rows}`;
+  $('#eXp').innerHTML = xpHtml(me && me.xp);
+  $('#ovEnd').classList.add('show'); marker.visible = false;
+  return true;
+}
+
 /* ---------- UI ---------- */
 let bannerT = null;
 function banner(t, ms = 1500) { const b = $('#banner'); b.textContent = t; b.classList.add('show'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('show'), ms); }
 function buildWeaponButtons() {
   const w = $('#weps'); w.innerHTML = '';
   WKEYS.forEach(k => { const b = document.createElement('button'); b.className = 'wep'; b.dataset.k = k; b.onclick = () => selectWeapon(k); w.appendChild(b); });
+  if (S.fx && S.fx.flares != null) {                            // night missions: flare shells
+    const fb = document.createElement('button'); fb.className = 'wep flare'; fb.id = 'flareBtn'; fb.onclick = () => selectWeapon('flare'); w.appendChild(fb);
+  }
   const ib = document.createElement('button'); ib.className = 'wep item'; ib.id = 'itemBtn'; ib.onclick = useItem; w.appendChild(ib);
   if ((S.map && S.map.move) > 0) {
     const db = document.createElement('button'); db.className = 'wep drive'; db.id = 'driveBtn'; db.onclick = () => setDrive(!DRV.on); w.appendChild(db);
@@ -1266,7 +1568,11 @@ function buildWeaponButtons() {
     hb.title = 'End your turn without firing, so you stay hidden'; w.appendChild(hb);
   }
 }
-function selectWeapon(k) { const me = S.P[S.me]; if (!me || !myTurn() || me.ammo[k] === 0) return; S.aim.weapon = k; syncUI(); }
+function selectWeapon(k) {
+  const me = S.P[S.me]; if (!me || !myTurn()) return;
+  if (k === 'flare' ? !(S.fx && S.fx.flares > 0) : me.ammo[k] === 0) return;
+  S.aim.weapon = k; syncUI();
+}
 function syncHoldButton(me, mine) {
   const b = $('#holdBtn'); if (!b) return;
   const on = !!cloakOf(S.me) && !me.dead;
@@ -1309,9 +1615,11 @@ function boardStatus() {
 function syncUI() {
   if (!S.loaded && !S.match) return;
   const m = S.match, me = S.P[S.me];
-  $('#roundLbl').textContent = m && m.status === 'finished' ? 'BATTLE OVER' : `${MODE_NAMES[m && m.game_mode] || 'RANKED'} · ${S.map ? S.map.name.toUpperCase() : ''} · TURN ${m ? m.turn : ''}`;
-  $('#boardStatus').innerHTML = boardStatus();
-  $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
+  $('#roundLbl').textContent = S.mission ? `${m && m.status === 'finished' ? 'MISSION OVER' : 'MISSION'} · ${S.mission.title.toUpperCase()}`
+    : m && m.status === 'finished' ? 'BATTLE OVER' : `${MODE_NAMES[m && m.game_mode] || 'RANKED'} · ${S.map ? S.map.name.toUpperCase() : ''} · TURN ${m ? m.turn : ''}`;
+  $('#boardStatus').innerHTML = S.mission ? missionStatus() : boardStatus();
+  if (S.mission) $('#rows').innerHTML = missionRows(m);
+  else $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
     <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4" title="Holding a power-up (only they know which)">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}${cloakOf(q.seat) && !q.dead ? '<span class="it ck" title="Invisible: you can\'t see where this tank is">◌</span>' : ''}</div>
     <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
@@ -1330,6 +1638,10 @@ function syncUI() {
     b.classList.toggle('on', S.aim.weapon === k); b.disabled = a === 0;
     b.innerHTML = `<span>${WEAPONS[k].name}</span><kbd>${a == null ? '∞' : '×' + a}${DEV.touch ? '' : ' · ' + WEAPONS[k].key}</kbd>`; });
   syncItemButton(me, mine);
+  const flb = $('#flareBtn');
+  if (flb) { const n = (S.fx && S.fx.flares) || 0; flb.disabled = !mine || n <= 0; flb.classList.toggle('on', S.aim.weapon === 'flare');
+    flb.title = 'Flare: lights up 40 m round where it bursts. Enemies there stay visible for 2 rounds';
+    flb.innerHTML = `<span><i>✷</i>Flare</span><kbd>×${n}${DEV.touch ? '' : ' · F'}</kbd>`; }
   syncHoldButton(me, mine);
   syncDriveUI(me, mine);
   $('#forecast').innerHTML = forecastHtml();
@@ -1347,6 +1659,7 @@ function syncSliders() {
 }
 function showEnd() {
   S.endShown = true;
+  if (S.mission && missionEnd()) return;
   const rows = [...S.P].sort((a, b) => (a.placement || 9) - (b.placement || 9));
   const me = S.P[S.me], w = rows.filter(r => r.placement === 1);
   if (S.match.ended === 'admin') {                           // ended from the admin page: no result
@@ -1444,6 +1757,7 @@ addEventListener('keydown', e => {
   else if (k === 'escape') setDrive(false);
   else if (k === '1' || k === '2' || k === '3') selectWeapon(WKEYS[+k - 1]);
   else if (k === '4') useItem();
+  else if (k === 'f') selectWeapon('flare');
   else if (k === 'h') holdFire();
   else if (k === 'v') camOverview(); else if (k === 'c') $('#bCam').click(); else if (k === 'm') $('#bMute').click();
 });
@@ -1475,7 +1789,7 @@ function updateVisuals(dt, time) {
   for (const P of S.P) {
     const t = P.tank; t.group.position.set(P.x, P.y, P.z); t.hull.rotation.y = -P.hullYaw*D2R;
     const hid = !!cloakOf(P.seat) && !P.dead && S.match && S.match.status === 'active';
-    t.group.visible = !(hid && P.seat !== S.me); ghost(P, hid && P.seat === S.me);
+    t.group.visible = !(hid && P.seat !== S.me) && !(hiddenTank(P) && !P.reloc); ghost(P, hid && P.seat === S.me);
     t.turret.rotation.y = -P.yaw*D2R; if (!P.dead) t.pivot.rotation.x = P.elev*D2R;
     const s = project(v3.set(P.x, P.y + 4.6, P.z));
     if (!s.vis || !t.group.visible) P.label.style.display = 'none';
@@ -1483,7 +1797,7 @@ function updateVisuals(dt, time) {
       P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = hpPct(P) + '%'; }
   }
   const m = S.match, cur = m && m.status === 'active' && !S.playing && !S.queue.length ? S.P[m.seat] : null;
-  if (cur && cur.seat !== S.me && cloakOf(cur.seat)) marker.visible = false;
+  if (cur && cur.seat !== S.me && (cloakOf(cur.seat) || hiddenTank(cur))) marker.visible = false;
   else if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
   else marker.visible = false;
   updateDriveVisuals(mine, time);
@@ -1507,6 +1821,7 @@ function updateVisuals(dt, time) {
     if (k >= 1) { P.y = P.reloc.to[1]; P.reloc = null; spawnSmoke(new THREE.Vector3(P.x, P.y + 1, P.z), 3, 1.4, 0x9a8f78, 1.5); }
   }
   updateCrates(dt, time); updateFx(dt, time);
+  if (S.mission) { updateMission(dt, time); updateObjLabels(); }
   for (const q of pops) { q.t += dt; q.pos.y += dt*3; const s = project(q.pos); q.el.style.left = s.x + 'px'; q.el.style.top = s.y + 'px'; q.el.style.opacity = String(1 - q.t/1.4); if (q.t > 1.4) { q.el.remove(); q.done = true; } }
   for (let i = pops.length - 1; i >= 0; i--) if (pops[i].done) pops.splice(i, 1);
   $('#windArrow').style.transform = `rotate(${(S.wind.ang + cam.yaw)/D2R}deg)`;
@@ -1544,5 +1859,5 @@ function loop() {
 }
 loop(); poll();
 // automated browser tests open the page as play.php?id=N#test to read the page's state
-if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS };
+if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS, cam, camAt, OBJ: () => OBJ, MI };
 })();

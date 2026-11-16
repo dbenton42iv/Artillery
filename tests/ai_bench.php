@@ -13,7 +13,7 @@ define('ART3D', true);
 $GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10, 'regen_per_turn' => 3];
 $drive = !in_array('--no-drive', $argv, true); $argv = array_values(array_diff($argv, ['--no-drive']));
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
-require dirname(__DIR__) . '/includes/ai.php';
+require_once dirname(__DIR__) . '/includes/ai.php';
 
 $per = (int)($argv[1] ?? 2); $limit = (int)($argv[2] ?? 40);
 $pool = ['highlands', 'archipelago', 'canyon', 'volcano', 'arctic'];

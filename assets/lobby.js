@@ -17,7 +17,9 @@
   const roomApi = (action, body) => call('api/room.php?action=' + action, body);
   const ERR = { in_match: 'You already have a battle in progress.', no_room: 'No open room with that code.', room_full: 'That room is full (4 players).',
                 need_players: 'You need at least one more player to start.', someone_in_match: 'Someone in the room is still in another battle.',
-                not_host: 'Only the host can do that.', room_closed: 'The host closed the room.' };
+                not_host: 'Only the host can do that.', room_closed: 'The host closed the room.',
+                locked: 'Earn a star on the mission before it to open this one.', too_many_players: 'Too many players for this mission.',
+                mission_invalid: 'This mission needs fixing in the editor first.', no_mission: 'That mission is not available.' };
   const showErr = e => { $('#mmErr').textContent = ERR[e] || 'Something went wrong (' + e + ').'; $('#mmErr').hidden = false; };
 
   /* ---------- tabs ---------- */
@@ -25,7 +27,8 @@
     tab = t;
     $$('.tabs button').forEach(b => { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
     $$('.tab').forEach(p => p.hidden = p.dataset.pane !== t);
-    $('#queueBox').hidden = t === 'private' || t === 'ai';
+    $('#queueBox').hidden = t === 'private' || t === 'ai' || t === 'missions';
+    if (t === 'missions') loadMissions();
     $('#findBtn').textContent = t === 'casual' ? 'Find casual match' : 'Find match';
     $('#mmErr').hidden = true;
   }
@@ -77,6 +80,52 @@
   };
   $('#cancelBtn').onclick = async () => { stop(); await api('leave', {}); };
 
+  /* ---------- missions (phase 5): the co-op campaign ---------- */
+  let missions = null, openMission = null;
+  const escH = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const starRow = n => [0, 1, 2].map(k => `<i class="${k < n ? 'on' : ''}">★</i>`).join('');
+  async function loadMissions() {
+    try { const s = await call('api/scenario.php?action=list'); missions = s; renderMissions(); } catch (e) { $('#missionList').innerHTML = '<p class="err">Could not load the missions.</p>'; }
+  }
+  function renderMissions() {
+    const s = missions; if (!s) return;
+    $('#msStars').textContent = `★ ${s.stars} / ${s.max_stars}`;
+    $('#msNote').textContent = s.admin ? 'Admin: every mission is open. Build your own in the Mission editor.' : '';
+    let n = 0;
+    $('#missionList').innerHTML = s.missions.map(m => {
+      const no = m.campaign ? ++n : null, open = openMission === m.id;
+      const pl = m.players[0] === m.players[1] ? `${m.players[0]} player${m.players[0] > 1 ? 's' : ''}` : `${m.players[0]}–${m.players[1]} players`;
+      return `<div class="ms-card${m.open ? '' : ' locked'}${open ? ' open' : ''}" data-id="${m.id}">
+        <button class="ms-top" type="button" ${m.open ? '' : 'disabled'} aria-expanded="${open}">
+          <span class="ms-no">${no ?? '✦'}</span>
+          <span class="ms-t"><b>${escH(m.title)}</b><small>${escH(m.map_name)}${m.night ? ' · night' : ''} · ${escH(m.goal)}</small></span>
+          <span class="ms-stars" title="${m.stars} of 3 stars">${m.open ? starRow(m.stars) : '🔒'}</span>
+        </button>
+        ${open ? `<div class="ms-body"><p>${escH(m.blurb)}</p>
+          <div class="ms-rules small"><span>★ Complete it</span><span>★ ${m.stars_rule.shots} shots or fewer each</span><span>★ ${m.stars_rule.damage} damage or less each</span></div>
+          <div class="muted small">${pl} · ${m.enemies} enemies${m.plays ? ` · played ${m.plays}, won ${m.wins}${m.best_shots != null ? ` · best: ${m.best_shots} shots, ${m.best_damage} damage` : ''}` : ''}</div>
+          <div class="room-btns">${m.players[0] <= 1 ? '<button class="btn" data-act="solo" type="button">Play solo</button>' : ''}${m.players[1] >= 2 ? '<button class="btn ghost" data-act="coop" type="button">Play with friends</button>' : ''}</div>
+        </div>` : m.open ? '' : '<div class="ms-lock small muted">Earn a star on the mission before this one to open it.</div>'}
+      </div>`;
+    }).join('') || '<p class="muted small">No missions yet.</p>';
+  }
+  $('#missionList').addEventListener('click', async ev => {
+    const card = ev.target.closest('.ms-card'); if (!card) return;
+    const id = +card.dataset.id, act = ev.target.closest('[data-act]');
+    if (!act) { if (ev.target.closest('.ms-top')) { openMission = openMission === id ? null : id; renderMissions(); } return; }
+    $('#mmErr').hidden = true; act.disabled = true;
+    if (act.dataset.act === 'solo') {
+      const s = await call('api/scenario.php?action=start', { mission: id });
+      if (s.error === 'in_match' || s.match_id) { location.href = 'play.php?id=' + s.match_id; return; }
+      act.disabled = false; return showErr(s.error);
+    }
+    const s = await roomApi('create', { mission: id, map: 'random', items: 'all', turn_seconds: 40 });   // a private room for this mission
+    if (s.error === 'in_match') { location.href = 'play.php?id=' + s.match_id; return; }
+    act.disabled = false;
+    if (s.error) return showErr(s.error);
+    setTab('private'); startRoom();
+  });
+
   /* ---------- private rooms ---------- */
   const MAPNAMES = Object.fromEntries([...$('#roomSet select[name=map]').options].map(o => [o.value, o.textContent]));
   const ITEMS = { all: 'All power-ups', safe: 'Ranked-safe power-ups', off: 'No power-ups' };
@@ -96,7 +145,13 @@
     for (let k = r.members.length; k < r.max; k++) li.push('<li class="empty">Waiting for a player…</li>');
     $('#roomMembers').innerHTML = li.join('');
     const st = r.settings, box = $('#roomSetIn');
-    if (r.host) {
+    const mi = r.mission;                                       // phase 5: a co-op mission instead of a battle
+    $('#roomMission').hidden = !mi; box.hidden = !!mi;
+    if (mi) {
+      $('#roomMission').innerHTML = `<div class="muted small">MISSION</div><b>${esc(mi.title)}</b><div class="small">${esc(mi.goal)}</div><div class="muted small">${esc(mi.map)} · ${mi.players[0] === mi.players[1] ? mi.players[0] : mi.players[0] + '–' + mi.players[1]} players</div>`
+        + (r.host ? '<button class="link" id="roomToBattle" type="button">Play a battle instead</button>' : '');
+      const tb = $('#roomToBattle'); if (tb) tb.onclick = () => roomApi('update', { map: st.map, items: st.items, turn_seconds: st.turn_seconds });
+    } else if (r.host) {
       if (!box.querySelector('select')) {                     // the host edits a copy of the form
         box.innerHTML = $('#roomSet').innerHTML;
         box.querySelectorAll('select').forEach(sel => sel.onchange = () => roomApi('update', settingsFrom(box)));
@@ -108,8 +163,10 @@
       box.innerHTML = `<div class="set-ro">Map <b>${esc(MAPNAMES[st.map] || st.map)}</b></div><div class="set-ro"><b>${ITEMS[st.items]}</b></div><div class="set-ro">Shot clock <b>${st.turn_seconds} s</b></div>`;
     }
     $('#roomStart').hidden = !r.host;
-    $('#roomStart').disabled = r.members.length < 2;
-    $('#roomHint').textContent = r.host ? (r.members.length < 2 ? 'Tap Invite friends to send them the link (or give them the code). You can start when at least one has joined.' : `Start when everyone is in (${r.members.length} of ${r.max}).`)
+    $('#roomStart').textContent = mi ? 'Start mission' : 'Start battle';
+    $('#roomStart').disabled = mi ? r.members.length < mi.players[0] || r.members.length > mi.players[1] : r.members.length < 2;
+    $('#roomHint').textContent = mi ? (r.host ? `Start when everyone is in (${r.members.length} of up to ${Math.min(r.max, mi.players[1])}). You can also start on your own.` : 'Waiting for the host to start the mission.')
+      : r.host ? (r.members.length < 2 ? 'Tap Invite friends to send them the link (or give them the code). You can start when at least one has joined.' : `Start when everyone is in (${r.members.length} of ${r.max}).`)
       : 'Waiting for the host to start the battle.';
   }
   async function roomTick() {

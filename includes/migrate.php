@@ -34,6 +34,7 @@ function ensure_schema(): void
               'skills' => 'SELECT u.xp, u.level, u.loadout, u.first_win_on, p.loadout, p.xp, p.xp_detail FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
               'bans' => 'SELECT banned_until, ban_reason, banned_by FROM ' . T('users') . ' LIMIT 0',
               'cosmetics' => 'SELECT u.cosmetics, p.cosmetics FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
+              'scenarios' => 'SELECT m.id, s.stars FROM ' . T('missions') . ' m, ' . T('scenario_progress') . ' s LIMIT 0',
              ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
@@ -99,6 +100,10 @@ function ensure_schema(): void
             if (!in_array('ban_reason', $have, true))   $add[] = 'ADD COLUMN ban_reason VARCHAR(200) NULL';
             if (!in_array('banned_by', $have, true))    $add[] = 'ADD COLUMN banned_by VARCHAR(40) NULL';
             if ($add) $pdo->exec('ALTER TABLE ' . T('users') . ' ' . implode(', ', $add));
+        }
+        if (in_array('scenarios', $need, true)) {               // phase 5: missions and campaign progress
+            require_once __DIR__ . '/schema.php';
+            foreach (schema_sql(cfg('db')['prefix']) as $sql) if (preg_match('/`[^`]*(missions|scenario_progress)`/', $sql)) $pdo->exec($sql);
         }
         if (in_array('skills', $need, true)) {                   // phase 4: XP, levels and loadouts
             $have = $cols('users'); $add = [];

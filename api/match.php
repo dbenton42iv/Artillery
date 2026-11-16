@@ -6,7 +6,7 @@ declare(strict_types=1);
  */
 require dirname(__DIR__) . '/includes/bootstrap.php';
 require dirname(__DIR__) . '/includes/game.php';
-require dirname(__DIR__) . '/includes/ai.php';
+require_once dirname(__DIR__) . '/includes/ai.php';
 
 $u = api_user(false);
 $mid = (int)($_GET['id'] ?? 0);

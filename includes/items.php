@@ -38,7 +38,7 @@ const POWERUPS = [
     'earthmover' => ['name' => 'Earthmover',     'kind' => 'shell',   'safe' => true,  'weight' => 10, 'short' => 'Builds a mound instead of a crater'],
     'double'     => ['name' => 'Double Shot',    'kind' => 'instant', 'safe' => false, 'weight' => 6,  'short' => 'Fire twice this turn'],
     'rangefinder'=> ['name' => 'Rangefinder',    'kind' => 'instant', 'safe' => false, 'weight' => 6,  'short' => 'Aim arc shows the whole flight, wind included'],
-    'flare'      => ['name' => 'Flare',          'kind' => 'instant', 'safe' => false, 'weight' => 0,  'short' => 'Night maps only (Scenarios)'],
+    'flare'      => ['name' => 'Flare',          'kind' => 'shell',   'safe' => false, 'weight' => 0,  'short' => 'Night missions: a shell that lights up 40 m for 2 rounds'],
     'relocate'   => ['name' => 'Relocate',       'kind' => 'turn',    'safe' => false, 'weight' => 2,  'short' => 'Moves your tank 40 m+ at random. Uses your turn'],
     'cloak'      => ['name' => 'Invisibility',   'kind' => 'instant', 'safe' => false, 'weight' => 6,  'short' => 'Vanish for 2 rounds; firing reveals you'],
 ];
@@ -89,6 +89,7 @@ final class FX
                 // who is invisible and for how many more of their own turns; never where they are
                 'cloak' => (object)array_map(fn($c) => ['left' => (int)$c['left']], $e['cloak'] ?? [])];
         if ($me !== null && !empty($e['forecast'][$me])) $out['forecast'] = $e['forecast'][$me];
+        if (isset($e['round'])) $out += mission_fx_pub($e, $me);   // Scenarios (phase 5): round, waves, flares, the convoy, the Behemoth
         return $out;
     }
 }

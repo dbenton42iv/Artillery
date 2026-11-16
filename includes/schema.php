@@ -145,6 +145,33 @@ function schema_sql(string $p): array
   KEY ix_item (item, action),
   KEY ix_match (match_id)
 ) $e",
+"CREATE TABLE IF NOT EXISTS `{$p}missions` (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(24) NOT NULL,
+  title VARCHAR(40) NOT NULL,
+  sort INT NOT NULL DEFAULT 0,
+  campaign TINYINT(1) NOT NULL DEFAULT 0,
+  status ENUM('draft','published') NOT NULL DEFAULT 'draft',
+  def MEDIUMTEXT NOT NULL,
+  author VARCHAR(40) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_slug (slug),
+  KEY ix_status (status, campaign, sort)
+) $e",
+"CREATE TABLE IF NOT EXISTS `{$p}scenario_progress` (
+  user_id INT UNSIGNED NOT NULL,
+  mission_id INT UNSIGNED NOT NULL,
+  stars TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  best_shots INT UNSIGNED NULL,
+  best_damage INT UNSIGNED NULL,
+  plays INT UNSIGNED NOT NULL DEFAULT 0,
+  wins INT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, mission_id),
+  FOREIGN KEY (user_id) REFERENCES `{$p}users`(id) ON DELETE CASCADE,
+  FOREIGN KEY (mission_id) REFERENCES `{$p}missions`(id) ON DELETE CASCADE
+) $e",
 "CREATE TABLE IF NOT EXISTS `{$p}errors` (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

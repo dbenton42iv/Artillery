@@ -264,3 +264,29 @@ a.big{display:inline-block;text-decoration:none}
 [data-layout=phone] #shotCards .cw{font-size:11px}
 [data-layout=phone] #panel.collapsed #shotCards{display:none}
 [data-layout=phone][data-orient=landscape] #panel{grid-template-areas:"who who who" "sliders weps weps" "sliders cards cards" "sliders aim fire"}
+/* ---------- Scenarios (phase 5) ---------- */
+#boardStatus .mgoal{color:var(--ink);font-weight:700;font-size:14px;line-height:1.2;max-width:300px}
+#boardStatus .mprog{color:#ffcf8a;font-size:13px;margin-top:2px;max-width:300px}
+.egrid{display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 2px}
+.erow{display:grid;grid-template-columns:5px 1fr;grid-template-rows:auto 4px;gap:1px 6px;align-items:center;padding:2px 4px;border-radius:5px;font-size:12px;min-width:0}
+.erow.cur{background:rgba(255,255,255,.08)}
+.erow.dead{opacity:.35}
+.erow .sw{width:5px;height:16px;border-radius:2px;grid-row:span 2}
+.erow .en{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .en small{color:var(--dim);font-weight:600}
+.erow .eh{height:4px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
+.erow .eh i{display:block;height:100%;background:#e5484d}
+.waves{font-size:12px;color:var(--dim);margin-top:2px}
+.wep.flare{--ic:#fff3a0}.wep.flare i{color:#fff3a0;font-style:normal;margin-right:5px}
+.wep.flare.on{border-color:#fff3a0;background:rgba(255,243,160,.14)}
+.tl.wp-l{font-size:11px;color:#ffd34d}
+#ovEnd .stars{font-size:46px;letter-spacing:.12em;text-align:center;line-height:1;margin:2px 0}
+#ovEnd .stars span{color:rgba(255,255,255,.18)}
+#ovEnd .stars span.on{color:#f0b429;text-shadow:0 0 14px rgba(240,180,41,.6)}
+#ovEnd .crit{font-size:14px;color:var(--dim);display:grid;gap:2px;justify-content:center}
+#ovEnd .crit .ok{color:#7bd389}
+[data-layout=phone] .egrid{grid-template-columns:1fr 1fr 1fr}
+[data-layout=phone] #boardStatus .mgoal{font-size:12px;max-width:none}
+[data-layout=phone] #boardStatus .mprog{font-size:11px}
+[data-layout=phone] .erow{font-size:11px}
+.tl.obj-l{font-size:12px}
