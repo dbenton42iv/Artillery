@@ -239,77 +239,164 @@ function circle_centre(array $pts): ?array
     return [$A / $det / 2, $B / $det / 2];
 }
 
+/*
+ * Elevation tiers (David's request, 16 Nov): tanks never start level with each other. Each map gives its tanks
+ * different heights (a ridge shoulder and a valley, a tall island and a low one, canyon floors at different depths),
+ * evenly spread between a low and a high level and dealt out at random, so no seat is favoured over many matches.
+ */
+
+/** $n heights spread evenly from $lo to $hi (a little jitter), in random order. */
+function tier_levels(int $n, float $lo, float $hi): array
+{
+    $gap = $n > 1 ? ($hi - $lo) / ($n - 1) : 0.0; $out = [];
+    for ($k = 0; $k < $n; $k++) $out[] = $n > 1 ? $lo + $k * $gap + (rnd() - .5) * $gap * .3 : ($lo + $hi) / 2;
+    for ($k = $n - 1; $k > 0; $k--) { $j = (int)floor(rnd() * ($k + 1)); [$out[$k], $out[$j]] = [$out[$j], $out[$k]]; }
+    return $out;
+}
+
+/**
+ * Raise or lower the ground around each tank to its tier: flat out to $r0 metres (ragged edge), blending back to the
+ * natural terrain by $r1. A high tier becomes a shoulder or mesa, a low one a hollow or shelf.
+ */
+function lift_spawns(callable $f, Noise $nz, array $spawns, array $levels, float $r0, float $r1): callable
+{
+    $h0 = array_map(fn($sp) => $f($sp[0], $sp[1]), $spawns);
+    return function (float $x, float $z) use ($f, $nz, $spawns, $levels, $h0, $r0, $r1) {
+        $h = $f($x, $z);
+        foreach ($spawns as $k => $sp) {
+            $d = hypot($x - $sp[0], $z - $sp[1]);
+            if ($d >= $r1 + 6) continue;
+            $d += ($nz->fbm($x * .07 + $k * 13.1, $z * .07 + 5) - .5) * 9;
+            if ($d < $r1) $h += ($levels[$k] - $h0[$k]) * (1 - smoothstep($r0, $r1, $d));
+        }
+        return $h;
+    };
+}
+
 function gen_highlands(Noise $nz, int $n, float $half, int $players): array
 {
     $s = $half / 120; $ang = rnd() * M_PI; $rx = cos($ang); $rz = sin($ang);
-    $mH = 18 + rnd() * 20; $mLen = (35 + rnd() * 25) * $s; $ox = rnd() * 100; $oz = rnd() * 100;
-    $f = function (float $x, float $z) use ($nz, $rx, $rz, $mH, $mLen, $ox, $oz, $half) {
+    $mH = 22 + rnd() * 16; $mLen = (35 + rnd() * 25) * $s; $ox = rnd() * 100; $oz = rnd() * 100;
+    // a second, lower ridge and a few knolls break up the slopes
+    $a2 = $ang + M_PI / 2 + (rnd() - .5); $r2x = cos($a2); $r2z = sin($a2); $off2 = (rnd() - .5) * 60 * $s;
+    $knolls = []; for ($k = 0; $k < (int)round(5 * $s * $s); $k++) $knolls[] = [(rnd() * 2 - 1) * 90 * $s, (rnd() * 2 - 1) * 90 * $s, 8 + rnd() * 9, (9 + rnd() * 7) * $s];
+    $f = function (float $x, float $z) use ($nz, $rx, $rz, $r2x, $r2z, $off2, $mH, $mLen, $ox, $oz, $half, $knolls, $s) {
         $h = $nz->fbm($x * .011 + $ox, $z * .011 + $oz) * 34 - 8;
         $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
         $h += $mH * exp(-($across * $across) / (2 * 15 * 15)) * exp(-($along * $along) / (2 * $mLen * $mLen));
+        $a2 = $x * $r2x + $z * $r2z; $c2 = -$x * $r2z + $z * $r2x - $off2;
+        $h += 12 * exp(-($c2 * $c2) / (2 * 9 * 9)) * exp(-($a2 * $a2) / (2 * (45 * $s) ** 2));
+        foreach ($knolls as [$kx, $kz, $kh, $kr]) { $d2 = ($x - $kx) ** 2 + ($z - $kz) ** 2; if ($d2 < 9 * $kr * $kr) $h += $kh * exp(-$d2 / (2 * $kr * $kr)); }
         return max(.3, .3 + ($h + 6) * edge_falloff($nz, $x, $z, $half));
     };
-    return [$f, ring_spawns($players, 74 * $s, 86 * $s), []];
+    $spawns = ring_spawns($players, 70 * $s, 80 * $s);
+    // tanks on shelves and shoulders of the hills, from a low valley pad to a high one
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.0, 22.0), 9.0, 28.0), $spawns, []];
 }
 
+/*
+ * Archipelago (remade 16 Nov, David's request): one big ring-shaped island, a torus, round a lagoon. The ring rises
+ * and falls in hills and low saddles; every tank sits on the ring at its own height, and the lagoon in the middle
+ * (with a few rocky islets) and the sea outside both splash shells.
+ */
 function gen_archipelago(Noise $nz, int $n, float $half, int $players): array
 {
-    $s = $half / 120; $base = rnd() * M_PI * 2;
-    $k = min(5, max(3, $players + (rnd() < .5 ? 1 : 0)));
-    if ($players === 2) $k = 3 + (rnd() < .5 ? 1 : 0);
-    $isl = []; $spawns = []; $r = (66 + rnd() * 10) * $s;
-    for ($i = 0; $i < $players; $i++) {                      // one island per tank, evenly around the ring
-        $a = $base + $i * M_PI * 2 / $players + (rnd() - .5) * .2;
-        $isl[] = [sin($a) * $r, -cos($a) * $r, (19 + rnd() * 5) * $s, 7 + rnd() * 5];
-        $spawns[] = [sin($a) * ($r - 2), -cos($a) * ($r - 2)];
+    $s = $half / 120; $Rr = (72 + rnd() * 6) * $s; $tube = 17 * $s;     // ring radius and half its width
+    $ox = rnd() * 100; $oz = rnd() * 100;
+    $spawns = ring_spawns($players, $Rr, $Rr);
+    $isl = [];                                              // islets in the lagoon
+    for ($k = 0, $tries = 0; $k < 3 && $tries < 30; $tries++) {
+        $a = rnd() * M_PI * 2; $r = rnd() * ($Rr - $tube - 14 * $s);
+        $c = [sin($a) * $r, -cos($a) * $r, (6 + rnd() * 5) * $s, 5 + rnd() * 7];
+        foreach ($isl as $o) if (hypot($o[0] - $c[0], $o[1] - $c[1]) < $o[2] + $c[2] + 6) continue 2;
+        $isl[] = $c; $k++;
     }
-    for ($j = 0; $j < $k - $players; $j++) {                 // extra islands in the gaps (or the middle)
-        if ($j < $players && $players < 4) {
-            $a = $base + ($j + .5) * M_PI * 2 / $players; $r = (30 + rnd() * 18) * $s;
-            $isl[] = [sin($a) * $r, -cos($a) * $r, (14 + rnd() * 6) * $s, 6 + rnd() * 8];
-        } else $isl[] = [0.0, 0.0, (16 + rnd() * 6) * $s, 8 + rnd() * 8];
-    }
-    $f = function (float $x, float $z) use ($nz, $isl) {
-        $h = -3 + $nz->fbm($x * .02, $z * .02) * 2;
-        foreach ($isl as $q => [$cx, $cz, $R, $ih]) {
-            $d = hypot($x - $cx, $z - $cz) + ($nz->fbm($x * .05 + $q * 7, $z * .05) - .5) * $R * .5;
-            if ($d >= $R) continue;
-            $prof = 1 - smoothstep($R * .35, $R, $d);
-            $h = max($h, -3 + $prof * ($ih + 3 + ($nz->fbm($x * .045 + 31, $z * .045 + $q) - .5) * 8));
+    $f = function (float $x, float $z) use ($nz, $Rr, $tube, $ox, $oz, $isl) {
+        $h = -3 + $nz->fbm($x * .02, $z * .02) * 2;                       // sea and lagoon floor
+        $r = hypot($x, $z); $ang = atan2($x, -$z);
+        $w = $tube * (.8 + .45 * $nz->fbm(cos($ang) * 2 + $ox, sin($ang) * 2 + $oz, 3));   // the ring's width varies
+        $d = abs($r - $Rr) + ($nz->fbm($x * .05 + 11, $z * .05) - .5) * 5;
+        if ($d < $w) {
+            // hills and saddles along the ring: crest 4–18 m, round in cross-section like a torus
+            $crest = 4 + 14 * $nz->fbm(cos($ang) * 1.6 + $oz, sin($ang) * 1.6 + $ox, 4);
+            $q = $d / $w;
+            $h = max($h, -3 + ($crest + 3) * sqrt(max(0.0, 1 - $q * $q)) + ($nz->fbm($x * .06 + 3, $z * .06) - .5) * 2.5);
+        }
+        foreach ($isl as $k => [$cx, $cz, $R, $ih]) {
+            $dd = hypot($x - $cx, $z - $cz); if ($dd > $R * 1.3) continue;
+            $dd += ($nz->fbm($x * .07 + $k * 5, $z * .07) - .5) * $R * .4;
+            if ($dd < $R) $h = max($h, -3 + ($ih + 3) * (1 - smoothstep($R * .3, $R, $dd)));
         }
         return max(.3, $h);
     };
-    return [$f, $spawns, []];
+    // each tank on the ring at its own height, from a low beach to a high bluff
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.5, 17.0), 8.0, 20.0), $spawns, []];
 }
 
+/*
+ * Canyon (remade 16 Nov): a high plateau cut by winding canyons. Every tank starts down on the floor of its own
+ * canyon, at its own depth, and has to lob up over the rims; a canyon floor is a road it can drive along. One or two
+ * more canyons cross the plateau between them. Wind is strong and blows from any direction over the rims.
+ */
 function gen_canyon(Noise $nz, int $n, float $half, int $players): array
 {
-    $s = $half / 120; $a = rnd() * M_PI; $rx = cos($a); $rz = sin($a); $gw = 24 * $s;
-    $ox = rnd() * 100; $oz = rnd() * 100;
-    $wig = fn(float $along) => ($nz->fbm($along * .02 + 3, 5.5, 3) - .5) * 18 * $s;
-    $f = function (float $x, float $z) use ($nz, $rx, $rz, $gw, $ox, $oz, $half, $wig) {
-        $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
-        $ac = abs($across - $wig($along));
-        $plateau = 20 + $nz->fbm($x * .015 + $ox, $z * .015 + $oz) * 10;
-        $g = smoothstep($gw * .35, $gw, $ac + ($nz->fbm($x * .08, $z * .08) - .5) * 6);
-        $h = .6 + ($plateau - .6) * $g;
+    $s = $half / 120; $ox = rnd() * 100; $oz = rnd() * 100;
+    $spawns = ring_spawns($players, 68 * $s, 76 * $s);
+    $floors = tier_levels($players, 3.0, 12.0);
+    $W = 12.0 * $s;                                          // canyon half-width at the rim
+    $cs = [];                                                // [x0, z0, dirx, dirz, floor, wiggle table, half-width]
+    $mk = function (float $x0, float $z0, float $a, float $floor, int $seed, float $w) use ($nz, $half, $s) {
+        $dx = sin($a); $dz = -cos($a); $L = (int)ceil($half * 1.6); $wig = [];
+        $w0 = $nz->fbm($seed * 7.3, 2.5, 3);
+        for ($t = -$L; $t <= $L; $t++) $wig[$t + $L] = ($nz->fbm($t * .018 + $seed * 7.3, 2.5, 3) - $w0) * 46 * $s;
+        return [$x0, $z0, $dx, $dz, $floor, $wig, $L, $w];
+    };
+    /** Closest the canyon's centre line comes to any tank other than $skip (inside the map). */
+    $clear = function (array $c, int $skip) use ($spawns, $half) {
+        [$x0, $z0, $dx, $dz, , $wig, $L] = $c; $best = INF;
+        for ($t = -$L; $t < $L; $t += 2) {
+            $x = $x0 + $dx * $t - $dz * $wig[$t + $L]; $z = $z0 + $dz * $t + $dx * $wig[$t + $L];
+            if (abs($x) > $half || abs($z) > $half) continue;
+            foreach ($spawns as $k => $sp) if ($k !== $skip) $best = min($best, hypot($x - $sp[0], $z - $sp[1]));
+        }
+        return $best;
+    };
+    $seedN = 1;
+    foreach ($spawns as $k => $sp) {                        // each tank's own canyon runs across the line to the centre,
+        $best = null;                                        // and doesn't lead to another tank
+        for ($try = 0; $try < 12; $try++) {
+            $a = atan2($sp[0], -$sp[1]) + M_PI / 2 + (rnd() - .5) * .9;
+            $c = $mk($sp[0], $sp[1], $a, $floors[$k], $seedN++, $W); $d = $clear($c, $k);
+            if (!$best || $d > $best[1]) $best = [$c, $d];
+            if ($d > 32 * $s) break;
+        }
+        $cs[] = $best[0];
+    }
+    for ($j = 0, $m = $players >= 3 ? 1 : 2, $tries = 0; $j < $m && $tries < 40; $tries++) {   // deep canyons between the tanks,
+        $a = rnd() * M_PI; $o = (rnd() - .5) * 40 * $s;                                   // well away from all of them
+        $c = $mk(cos($a) * $o, sin($a) * $o, $a, 2.0 + rnd() * 3, 20 + $tries, $W * (.8 + rnd() * .3));
+        if ($clear($c, -1) < 30 * $s) continue;
+        $cs[] = $c; $j++;
+    }
+    $f = function (float $x, float $z) use ($nz, $cs, $ox, $oz, $half, $s) {
+        $plat = 25 + $nz->fbm($x * .012 + $ox, $z * .012 + $oz) * 10;           // plateau, 25–35 m
+        $h = $plat;
+        foreach ($cs as [$x0, $z0, $dx, $dz, $floor, $wig, $L, $w]) {
+            $px = $x - $x0; $pz = $z - $z0;
+            $t = $px * $dx + $pz * $dz; $q = -$px * $dz + $pz * $dx;
+            $ti = (int)round($t); if ($ti < -$L || $ti >= $L) continue;
+            $off = $wig[$ti + $L]; $slope = $wig[$ti + $L + 1] - $wig[$ti + $L];
+            $d = abs($q - $off) / sqrt(1 + $slope * $slope) + ($nz->fbm($x * .09 + 3, $z * .09) - .5) * 3;
+            if ($d > $w * 1.5) continue;
+            $fl = $floor + max(0.0, abs($t) - 20) * .03;                          // floors rise gently away from the tank
+            // steep walls with a ledge part way up
+            $c = $fl + ($plat - $fl) * (.4 * smoothstep($w * .42, $w * .7, $d) + .6 * smoothstep($w * .9, $w * 1.45, $d));
+            $h = min($h, $c);
+        }
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    // tanks alternate sides of the gorge: seat 0 north, seat 1 south, ...
-    $bySide = [1 => [], -1 => []];
-    for ($k = 0; $k < $players; $k++) $bySide[$k % 2 === 0 ? 1 : -1][] = $k;
-    $spawns = [];
-    foreach ($bySide as $side => $seats) {
-        $m = count($seats);
-        foreach ($seats as $q => $seat) {
-            $along = $m === 1 ? (rnd() - .5) * 30 * $s : ($q === 0 ? -1 : 1) * (32 + rnd() * 10) * $s;
-            $across = $wig($along) + $side * (55 + rnd() * 8) * $s;
-            $spawns[$seat] = [$along * $rx - $across * $rz, $along * $rz + $across * $rx];
-        }
-    }
-    ksort($spawns);
-    return [$f, array_values($spawns), ['wind_axis' => atan2($rx, -$rz)]];
+    return [$f, $spawns, []];
 }
 
 function gen_volcano(Noise $nz, int $n, float $half, int $players): array
@@ -317,20 +404,25 @@ function gen_volcano(Noise $nz, int $n, float $half, int $players): array
     $s = $half / 120; $rR = 48 * $s; $wR = 9 * $s; $rc = 24 * $s;
     $f = function (float $x, float $z) use ($nz, $s, $rR, $wR, $rc, $half) {
         $r = hypot($x, $z);
-        $h = 4 + $nz->fbm($x * .02, $z * .02) * 6;
-        $h += (8 + $nz->fbm($x * .03 + 17, $z * .03) * 14) * exp(-(($r - $rR) ** 2) / (2 * $wR * $wR));   // ring of hills
+        $h = 4 + $nz->fbm($x * .02, $z * .02) * 8;
+        $h += (8 + $nz->fbm($x * .03 + 17, $z * .03) * 16) * exp(-(($r - $rR) ** 2) / (2 * $wR * $wR));   // ring of hills
         $h += 22 * max(0, 1 - $r / $rc) ** 1.6;                                                            // cone
         $h -= 6 * max(0, 1 - $r / (5 * $s)) ** 2;                                                          // vent
+        $h += 7 * max(0, $nz->fbm($x * .025 + 50, $z * .025) - .55) * 4;                                  // old lava domes
         return max(.3, .3 + ($h + 2) * edge_falloff($nz, $x, $z, $half));
     };
-    return [$f, ring_spawns($players, 76 * $s, 84 * $s), ['vent' => [0.0, 0.0]]];
+    $spawns = ring_spawns($players, 72 * $s, 80 * $s);
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.5, 18.0), 9.0, 26.0), $spawns, ['vent' => [0.0, 0.0]]];
 }
 
 function gen_arctic(Noise $nz, int $n, float $half, int $players): array
 {
     $a = rnd() * M_PI; $rx = cos($a); $rz = sin($a); $ox = rnd() * 100; $oz = rnd() * 100;
     $f = function (float $x, float $z) use ($nz, $rx, $rz, $ox, $oz, $half) {
-        $h = 3.2 + $nz->fbm($x * .008 + $ox, $z * .008) * 1.6;
+        // stepped ice shelves: terraces about 3.5 m apart with short ice cliffs between them
+        $q = $nz->fbm($x * .009 + $ox, $z * .009 + 3) * 4.2; $fl = floor($q); $fr = $q - $fl;
+        $h = 3.2 + 3.5 * ($fl + smoothstep(.82, 1.0, $fr)) - 3.5;
+        $h = max(3.2, $h) + $nz->fbm($x * .03, $z * .03) * .8;
         $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
         $h += 7.5 * max(0, $nz->fbm($along * .012 + 7, $across * .045 + $oz, 4) - .5);                  // drifts
         $c = abs($nz->fbm($x * .012 + $oz, $z * .012 + $ox, 4) - .5);                                    // cracks between sheets
@@ -338,23 +430,43 @@ function gen_arctic(Noise $nz, int $n, float $half, int $players): array
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $spawns = ring_spawns($players, 70 * $half / 120, 80 * $half / 120);
+    // each tank on its own ice shelf: flat tops, cliff edges
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 3.5, 15.0), 12.0, 19.0), $spawns, []];
 }
 
 function gen_city(Noise $nz, int $n, float $half, int $players): array
 {
-    $f = function (float $x, float $z) use ($nz, $half) {
-        $h = 3.0 + $nz->fbm($x * .02, $z * .02) * .6;
+    $ox = rnd() * 100;
+    $f = function (float $x, float $z) use ($nz, $half, $ox) {
+        $h = 3.0 + max(0.0, $nz->fbm($x * .008 + $ox, $z * .008) - .3) * 34 + $nz->fbm($x * .02, $z * .02) * .6;   // a city on hills
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $spawns = ring_spawns($players, 70 * $half / 120, 80 * $half / 120);
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 3.5, 15.0), 10.0, 26.0), $spawns, []];
 }
 
 function gen_lunar(Noise $nz, int $n, float $half, int $players): array
 {
-    $f = fn(float $x, float $z) => 5 + $nz->fbm($x * .01, $z * .01) * 3 + $nz->fbm($x * .05 + 40, $z * .05) * .6;
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $s = $half / 120; $spawns = ring_spawns($players, 70 * $s, 80 * $s);
+    $mesas = [];                                             // flat-topped mesas, clear of the tanks
+    for ($k = 0, $tries = 0; $k < (int)round(5 * $s * $s) && $tries < 60; $tries++) {
+        $mx = (rnd() * 2 - 1) * 85 * $s; $mz = (rnd() * 2 - 1) * 85 * $s; $mr = (9 + rnd() * 9) * $s;
+        foreach ($spawns as $sp) if (hypot($mx - $sp[0], $mz - $sp[1]) < $mr + 28) continue 2;
+        $mesas[] = [$mx, $mz, $mr, 7 + rnd() * 7]; $k++;
+    }
+    $f = function (float $x, float $z) use ($nz, $mesas) {
+        $h = 5 + $nz->fbm($x * .01, $z * .01) * 6 + $nz->fbm($x * .05 + 40, $z * .05) * .6;
+        foreach ($mesas as $q => [$mx, $mz, $mr, $mh]) {
+            $d = hypot($x - $mx, $z - $mz); if ($d > $mr + 9) continue;
+            $d += ($nz->fbm($x * .08 + $q * 9, $z * .08) - .5) * 6;
+            if ($d < $mr + 6) $h += $mh * (1 - smoothstep($mr, $mr + 6, $d));
+        }
+        return $h;
+    };
+    // one tank up on a mesa, another down in a basin
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 2.5, 15.0), 10.0, 22.0), $spawns, []];
 }
 
 /** Lunar craters: bowls with raised rims, carved after the base plain. */
@@ -403,7 +515,7 @@ function place_buildings(Terrain $t, array $spawns): array
 /** The style of cover each map raises: [shape (2 rounded, 3 pointed), bump radius, ridge half-length, extra height]. */
 const COVER_STYLE = [
     'highlands'   => [2, 9.0, 12.0, 2.5],      // grassy hill
-    'archipelago' => [3, 7.0, 6.0, 3.0],       // sea stack: a rocky islet
+    'archipelago' => [3, 7.0, 6.0, 3.0],       // sea stack: a rocky islet in the lagoon
     'canyon'      => [3, 5.0, 8.0, 2.5],       // rock pillars on the rim
     'volcano'     => [2, 8.0, 10.0, 2.5],      // ash mound
     'arctic'      => [3, 5.5, 16.0, 2.5],      // pressure ridge: a long jagged ice wall

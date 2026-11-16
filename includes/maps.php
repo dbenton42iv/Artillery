@@ -18,12 +18,12 @@ defined('ART3D') || exit;
  */
 const MAPS = [
     'highlands'   => ['name' => 'Highlands',    'gravity' => 20.0, 'wind' => [0.0, 8.0],  'water' => 1.6,
-                      'blurb' => 'An island with a central ridge.'],
+                      'blurb' => 'Hills and ridges: tanks start on shelves at different heights.'],
     'archipelago' => ['name' => 'Archipelago',  'gravity' => 20.0, 'wind' => [0.0, 10.0], 'water' => 1.6, 'splash' => true,
-                      'blurb' => 'Shells that land in the sea splash: smaller blast, no crater.'],
-    'canyon'      => ['name' => 'Canyon',       'gravity' => 20.0, 'wind' => [6.0, 14.0], 'water' => 1.6, 'wind_axis' => true,
-                      'crate_high' => true,   // crates land up on the plateaus, never down in the gorge
-                      'blurb' => 'Strong wind always blows along the canyon. Lob high.'],
+                      'blurb' => 'A ring-shaped island round a lagoon. Shells that land in water splash: smaller blast, no crater.'],
+    'canyon'      => ['name' => 'Canyon',       'gravity' => 20.0, 'wind' => [4.0, 12.0], 'water' => 1.6,
+                      'crate_high' => true,   // centre drops only: crates land up high, never at the bottom of a canyon
+                      'blurb' => 'Every tank starts down in its own canyon. Lob high over the rims; the wind is strong.'],
     'volcano'     => ['name' => 'Volcano',      'gravity' => 20.0, 'wind' => [0.0, 6.0],  'water' => 1.6, 'erupt_every' => 4,
                       'blurb' => 'Every 4th turn the vent erupts: 3 lava bombs, and the cone grows.'],
     'arctic'      => ['name' => 'Arctic Shelf', 'gravity' => 20.0, 'wind' => [4.0, 12.0], 'water' => 1.6, 'snow' => true, 'fall_mult' => 1.5,

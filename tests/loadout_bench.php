@@ -90,11 +90,11 @@ function play(string $map, array $los, string $level = 'veteran', int $limit = 9
         $dead();
     }
     $alive = array_keys(array_filter($players, fn($p) => $p['alive']));
-    return [count($alive) === 1 ? $alive[0] : null, $turn];
+    return [count($alive) === 1 ? $alive[0] : null, $turn, array_map(fn($sp) => round($sp[1], 1), $gen['spawns'])];
 }
 
 $cmd = $argv[1] ?? 'pop';
-$pool = ['highlands', 'archipelago', 'canyon', 'volcano', 'arctic'];
+$pool = getenv('BENCH_MAPS') ? explode(',', getenv('BENCH_MAPS')) : ['highlands', 'archipelago', 'canyon', 'volcano', 'arctic'];
 if ($cmd === 'ffa') {
     $np = max(3, min(4, (int)($argv[2] ?? 3))); $n = (int)($argv[3] ?? 100); $seed = (int)($argv[4] ?? 1);
     for ($i = 0; $i < $n; $i++) {
@@ -118,8 +118,8 @@ for ($i = 0; $i < $n; $i++) {
     $aSeat = $i % 2;                                  // alternate who shoots first
     $los = $aSeat === 0 ? [$la, $lb] : [$lb, $la];
     $t0 = microtime(true);
-    [$win, $turns] = play($map, $los);
+    [$win, $turns, $ys] = play($map, $los);
     $w = $win === null ? null : ($win === $aSeat ? 'a' : 'b');
     echo json_encode(['a' => loadout_key($la), 'b' => loadout_key($lb), 'pa' => $la['preset'] ?? null, 'pb' => $lb['preset'] ?? null,
-                      'w' => $w, 'turns' => $turns, 'map' => $map, 's' => round(microtime(true) - $t0, 2)]), "\n";
+                      'w' => $w, 'turns' => $turns, 'map' => $map, 'ya' => $ys[$aSeat], 'yb' => $ys[1 - $aSeat], 's' => round(microtime(true) - $t0, 2)]), "\n";
 }

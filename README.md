@@ -78,19 +78,23 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   at sudden death (turn 30).
 - **Maps:** every match is played on one of these (each has its own look, physics and rule):
 
-  | Map | Rule | Gravity | Wind |
-  |---|---|---|---|
-  | Highlands | Island with a central ridge | 20 | 0–8 m/s |
-  | Archipelago | Shells landing in the sea splash: blast ×0.6, no crater | 20 | 0–10 m/s |
-  | Canyon | Wind always blows along the canyon | 20 | 6–14 m/s |
-  | Volcano | Every 4th turn: 3 lava bombs and the cone grows | 20 | 0–6 m/s |
-  | Arctic Shelf | Snow refills craters every turn; falls do ×1.5 damage | 20 | 4–12 m/s |
-  | Ruined City | Buildings (120 hp) stop shells until shot down to rubble | 20 | 0–6 m/s |
-  | Lunar Base | Low gravity, no wind | 7 | none |
+  | Map | Ground | Rule | Gravity | Wind |
+  |---|---|---|---|---|
+  | Highlands | Island of hills, a main ridge, a second ridge and knolls; tanks on shelves 4–22 m up | none | 20 | 0–8 m/s |
+  | Archipelago | A ring-shaped island (a torus) round a lagoon with rocky islets; the ring has hills and saddles, tanks on it 4.5–17 m up | Shells landing in water splash: blast ×0.6, no crater | 20 | 0–10 m/s |
+  | Canyon | A 25–35 m plateau cut by winding canyons; every tank starts on the floor of its own canyon, 3–12 m up, plus deep canyons between them | Lob high over the rims | 20 | 4–12 m/s |
+  | Volcano | Ring of hills round the cone, old lava domes; tanks 4.5–18 m up | Every 4th turn: 3 lava bombs and the cone grows | 20 | 0–6 m/s |
+  | Arctic Shelf | Stepped ice shelves with ice cliffs; each tank on its own shelf, 3.5–15 m | Snow refills craters every turn; falls do ×1.5 damage | 20 | 4–12 m/s |
+  | Ruined City | A city on hills; tanks 3.5–15 m up | Buildings (120 hp) stop shells until shot down to rubble | 20 | 0–6 m/s |
+  | Lunar Base | Cratered plain with flat-topped mesas; tanks from a basin (2.5 m) to a mesa (15 m) | Low gravity, no wind | 7 | none |
 
   1 v 1 and 3-tank matches use a 240 m map; 4-tank matches use 360 m.
+- **Different heights:** tanks never start level. On every map the tanks' heights are spread evenly between that
+  map's low and high level and dealt out at random, so no seat is favoured. In computer-vs-computer tests the
+  higher tank won about half of 1 v 1 matches (45–55% on every map, about 1,500 matches), so high ground is an
+  option, not a win.
 - **Cover on every map:** no map is flat with a straight line of sight between tanks. The open maps get their own
-  features (sea stacks on Archipelago, rock pillars on Canyon, pressure ridges on Arctic Shelf, rubble berms in
+  features (sea stacks in Archipelago's lagoon, rock pillars on Canyon, pressure ridges on Arctic Shelf, rubble berms in
   Ruined City, mesas on Lunar Base). After any map is built, every pair of tanks is checked turret to turret, and
   any pair that could see each other gets a ridge of cover, in the map's style, raised between them until the
   ground stands at least 2 m above the line of sight. Buildings don't count, because they can be shot down.

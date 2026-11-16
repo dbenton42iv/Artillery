@@ -733,6 +733,13 @@ function updateCamera(dt) {
   const cp = Math.cos(cam.pitch);
   camera.position.set(cam.target.x + Math.sin(cam.yaw)*cp*cam.dist, cam.target.y + Math.sin(cam.pitch)*cam.dist, cam.target.z + Math.cos(cam.yaw)*cp*cam.dist);
   const gh = heightAt(camera.position.x, camera.position.z); if (camera.position.y < gh + 2) camera.position.y = gh + 2;
+  // keep the view of the target clear: a tank down in a canyon would otherwise be hidden behind the canyon wall,
+  // so lift the camera until the line of sight clears the ground (it then looks down into the canyon)
+  const T = cam.target, C = camera.position;
+  for (let i = 1; i < 12; i++) {
+    const f = i / 12, need = T.y + (heightAt(T.x + (C.x - T.x)*f, T.z + (C.z - T.z)*f) + 1.5 - T.y) / f;
+    if (need > C.y) C.y = need;
+  }
   camera.lookAt(cam.target);
 }
 const ptrs = new Map(); let pinch0 = 0, tap = null;
