@@ -21,6 +21,7 @@ function ensure_schema(): void
               'drive' => 'SELECT moved FROM ' . T('match_players') . ' LIMIT 0',
               'skills' => 'SELECT u.xp, u.level, u.loadout, u.first_win_on, p.loadout, p.xp, p.xp_detail FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
               'bans' => 'SELECT banned_until, ban_reason, banned_by FROM ' . T('users') . ' LIMIT 0',
+              'cosmetics' => 'SELECT u.cosmetics, p.cosmetics FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
              ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
@@ -74,6 +75,10 @@ function ensure_schema(): void
         if (in_array('drive', $need, true)) {                    // phase 3: driving
             if (!in_array('moved', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN moved FLOAT NOT NULL DEFAULT 0 AFTER kills');
             $pdo->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move') NOT NULL");
+        }
+        if (in_array('cosmetics', $need, true)) {                // paint, barrels, trails, blasts, titles
+            if (!in_array('cosmetics', $cols('users'), true)) $pdo->exec('ALTER TABLE ' . T('users') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
+            if (!in_array('cosmetics', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
         }
         if (in_array('bans', $need, true)) {                     // admins can ban or pause players
             $have = $cols('users'); $add = [];

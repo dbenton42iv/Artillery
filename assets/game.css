@@ -48,6 +48,7 @@ input[type=range]{width:100%;accent-color:var(--accent);height:22px}
 #banner.show{opacity:1}
 #labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
 .tl{position:absolute;transform:translate(-50%,-100%);text-align:center;font-weight:700;font-size:13px;text-shadow:0 1px 3px #000;white-space:nowrap}
+.tl .ttl{font:400 10px 'Black Ops One',sans-serif;letter-spacing:.06em;color:#f0b429;opacity:.9}
 .tl .bar{width:44px;height:4px;margin:2px auto 0;background:rgba(0,0,0,.5);border-radius:2px;overflow:hidden}
 .tl .bar i{display:block;height:100%}
 .pop{position:absolute;transform:translate(-50%,-50%);font:400 22px 'Black Ops One';color:#ffd34d;text-shadow:0 2px 4px #000;pointer-events:none}

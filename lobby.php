@@ -9,7 +9,7 @@ $u = require_login();
 $rank = rank_for((int)$u['rating']);
 $active = active_match_for((int)$u['id']);
 
-$top = db()->query('SELECT id, username, alias, rating, games_played, wins FROM ' . T('users') . ' WHERE is_bot = 0 ORDER BY rating DESC, wins DESC, id LIMIT 25')->fetchAll();
+$top = db()->query('SELECT id, username, alias, rating, games_played, wins, cosmetics FROM ' . T('users') . ' WHERE is_bot = 0 ORDER BY rating DESC, wins DESC, id LIMIT 25')->fetchAll();
 $pos = db()->prepare('SELECT COUNT(*) + 1 FROM ' . T('users') . ' WHERE is_bot = 0 AND (rating > ? OR (rating = ? AND (wins > ? OR (wins = ? AND id < ?))))');
 $pos->execute([$u['rating'], $u['rating'], $u['wins'], $u['wins'], $u['id']]);
 $myPos = (int)$pos->fetchColumn();
@@ -144,7 +144,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       <?php if (empty($u['alias']) && !name_is_clean($u['username'])): ?>
       <p class="err">Your username can't be shown to other players, so you appear as <?= h($u['name']) ?>. <a href="account.php">Choose a name</a></p>
       <?php endif; ?>
-      <a class="small" href="account.php">Change name</a>
+      <div class="profile-links"><a class="small" href="account.php">Change name</a> · <a class="small" href="garage.php">Garage: paint your tank</a></div>
       <div class="level-line" title="Levels unlock skills. Every finished match earns XP; rating is separate and only changes in ranked.">
         <b>LEVEL <?= $level ?></b>
         <span class="xpbar"><i style="width:<?= $xpNeed ? round(100 * $xpInto / $xpNeed) : 100 ?>%"></i></span>
@@ -173,7 +173,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
         <tbody>
         <?php foreach ($top as $i => $row): $rk = rank_for((int)$row['rating']); ?>
           <tr class="<?= (int)$row['id'] === (int)$u['id'] ? 'me' : '' ?>">
-            <td><?= $i + 1 ?></td><td><?= h(display_name($row)) ?></td>
+            <td><?= $i + 1 ?></td><td><?= h(display_name($row)) ?><?php if ($tt = title_text($row['cosmetics'] ?? null)): ?><span class="lb-title"><?= h($tt) ?></span><?php endif; ?></td>
             <td style="color:<?= h($rk['color']) ?>"><?= h($rk['name']) ?></td>
             <td class="r"><?= (int)$row['rating'] ?></td><td class="r"><?= (int)$row['wins'] ?> / <?= (int)$row['games_played'] ?></td>
           </tr>

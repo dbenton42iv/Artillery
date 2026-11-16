@@ -433,31 +433,66 @@ function updateVent(dt, time) {
 }
 
 /* ---------- tanks / markers / trails ---------- */
-function makeTank(color) {
+/* Cosmetics (garage.php): looks only. The hull takes the player's paint or camo; the turret keeps the team colour so
+ * every tank is still easy to tell apart; the barrel model changes the gun's look (shells still leave from the same point). */
+const camoTex = {};
+function hullMaterial(color, paint) {
+  if (paint && paint.camo && window.ARTCAMO) {
+    const k = paint.camo + paint.colors.join();
+    if (!camoTex[k]) { camoTex[k] = new THREE.CanvasTexture(ARTCAMO.canvas(paint.camo, paint.colors, 256)); camoTex[k].wrapS = camoTex[k].wrapT = THREE.RepeatWrapping; }
+    return new THREE.MeshStandardMaterial({ map: camoTex[k], roughness: .75, metalness: .1 });
+  }
+  return new THREE.MeshStandardMaterial({ color: paint && paint.color ? new THREE.Color(paint.color) : color, roughness: .55, metalness: .25 });
+}
+function makeTank(color, cos) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color, roughness: .55, metalness: .25 });
+  const paint = hullMaterial(color, cos && cos.paint);
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a2b28, roughness: .9 });
   const hull = new THREE.Group(); g.add(hull);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.1, 1.05, 4.2), mat); body.position.y = .95; hull.add(body);
-  const front = new THREE.Mesh(new THREE.BoxGeometry(3.1, .6, .9), mat); front.position.set(0, 1.0, -2.3); front.rotation.x = .5; hull.add(front);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.1, 1.05, 4.2), paint); body.position.y = .95; hull.add(body);
+  const front = new THREE.Mesh(new THREE.BoxGeometry(3.1, .6, .9), paint); front.position.set(0, 1.0, -2.3); front.rotation.x = .5; hull.add(front);
   for (const sx of [-1, 1]) { const t = new THREE.Mesh(new THREE.BoxGeometry(.85, .95, 4.7), dark); t.position.set(sx*1.65, .48, 0); hull.add(t); }
   const turret = new THREE.Group(); turret.position.y = 1.5; g.add(turret);
   turret.add(new THREE.Mesh(new THREE.SphereGeometry(1.15, 22, 12, 0, Math.PI*2, 0, Math.PI/2), mat));
   const pivot = new THREE.Group(); pivot.position.y = .55; turret.add(pivot);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(.19, .24, BARREL, 12), dark); barrel.rotation.x = -Math.PI/2; barrel.position.z = -BARREL/2; pivot.add(barrel);
+  const model = cos && cos.barrel ? cos.barrel.model : 'standard';
+  const [len, r0, r1] = model === 'short' ? [BARREL*.75, .27, .32] : model === 'long' ? [BARREL*1.3, .15, .21] : [BARREL, .19, .24];
+  for (const x of model === 'twin' ? [-.24, .24] : [0]) {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(model === 'twin' ? .14 : r0, model === 'twin' ? .18 : r1, len, 12), dark);
+    barrel.rotation.x = -Math.PI/2; barrel.position.set(x, 0, -len/2); pivot.add(barrel);
+    if (model === 'short') { const brake = new THREE.Mesh(new THREE.CylinderGeometry(.36, .36, .4, 12), dark); brake.rotation.x = -Math.PI/2; brake.position.z = -len; pivot.add(brake); }
+  }
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g);
   return { group: g, hull, turret, pivot, mat };
 }
 const marker = new THREE.Mesh(new THREE.ConeGeometry(.9, 1.8, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
 marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
+/* A shell's trail. style (cosmetics): line, rainbow (the colour runs through the spectrum), rings (smoke rings along
+ * the path) or sparks (glittering points). */
+const ringGeo = new THREE.TorusGeometry(1, .18, 6, 18);
 class Trail {
-  constructor(color, opacity = .85) { this.max = 5000; this.arr = new Float32Array(this.max*3); this.n = 0;
+  constructor(color, opacity = .85, style = 'line') { this.max = 5000; this.arr = new Float32Array(this.max*3); this.n = 0; this.style = style; this.extras = [];
     this.geo = new THREE.BufferGeometry(); this.geo.setAttribute('position', new THREE.BufferAttribute(this.arr, 3)); this.geo.setDrawRange(0, 0);
-    this.line = new THREE.Line(this.geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity })); this.line.frustumCulled = false; scene.add(this.line); }
-  push(x, y, z) { if (this.n >= this.max) return; const i = this.n*3; this.arr[i] = x; this.arr[i+1] = y; this.arr[i+2] = z; this.n++;
-    this.geo.attributes.position.needsUpdate = true; this.geo.setDrawRange(0, this.n); }
-  dispose() { scene.remove(this.line); this.geo.dispose(); this.line.material.dispose(); }
+    const rainbow = style === 'rainbow';
+    if (rainbow) { this.col = new Float32Array(this.max*3); this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3)); }
+    this.line = new THREE.Line(this.geo, new THREE.LineBasicMaterial({ color: rainbow ? 0xffffff : color, vertexColors: rainbow, transparent: true, opacity: style === 'rings' ? opacity*.45 : opacity }));
+    this.line.frustumCulled = false; scene.add(this.line);
+    if (style === 'rings') this.rmat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .6, depthWrite: false });
+    if (style === 'sparks') { this.sp = new Float32Array(2000*3); this.sn = 0; this.sgeo = new THREE.BufferGeometry(); this.sgeo.setAttribute('position', new THREE.BufferAttribute(this.sp, 3)); this.sgeo.setDrawRange(0, 0);
+      this.pts = new THREE.Points(this.sgeo, new THREE.PointsMaterial({ color: 0xfff6c8, size: .35, transparent: true, opacity: .95, depthWrite: false })); this.pts.frustumCulled = false; scene.add(this.pts); }
+  }
+  push(x, y, z) { if (this.n >= this.max) return; const i = this.n*3; this.arr[i] = x; this.arr[i+1] = y; this.arr[i+2] = z;
+    if (this.col) { const c = new THREE.Color().setHSL((this.n*.006) % 1, .9, .6); this.col[i] = c.r; this.col[i+1] = c.g; this.col[i+2] = c.b; this.geo.attributes.color.needsUpdate = true; }
+    if (this.rmat && this.n % 10 === 5 && this.n > 1) { const m = new THREE.Mesh(ringGeo, this.rmat); m.position.set(x, y, z);
+      m.lookAt(this.arr[i-3], this.arr[i-2], this.arr[i-1]); m.scale.setScalar(1 + Math.min(this.n, 200)/200); scene.add(m); this.extras.push(m); }
+    if (this.pts && this.sn < 1998) for (let k = 0; k < 2; k++) { const j = this.sn*3; this.sp[j] = x + (Math.random() - .5)*1.2; this.sp[j+1] = y + (Math.random() - .5)*1.2; this.sp[j+2] = z + (Math.random() - .5)*1.2; this.sn++;
+      this.sgeo.attributes.position.needsUpdate = true; this.sgeo.setDrawRange(0, this.sn); }
+    this.n++; this.geo.attributes.position.needsUpdate = true; this.geo.setDrawRange(0, this.n); }
+  dispose() { scene.remove(this.line); this.geo.dispose(); this.line.material.dispose();
+    for (const m of this.extras) scene.remove(m); if (this.rmat) this.rmat.dispose();
+    if (this.pts) { scene.remove(this.pts); this.sgeo.dispose(); this.pts.material.dispose(); } }
 }
 const guide = new Trail(0xffffff, .75);
 let envTrails = [];
@@ -681,7 +716,12 @@ function spawnDebris(pos, R, color = 0x4a3a28, up = 8) {
     const a = Math.random()*Math.PI*2, s = 4 + Math.random()*R*1.4; scene.add(b);
     effects.push({ kind: 'debris', mesh: b, t: 0, dur: 2.5, vel: new THREE.Vector3(Math.cos(a)*s, up + Math.random()*R*1.6, Math.sin(a)*s), spin: Math.random()*8 }); }
 }
-function spawnExplosion(pos, R, hot = 0xffc04a) {
+const CONFETTI = [0xe5484d, 0x4aa8ff, 0x3ddc84, 0xf0b429, 0xb07cff];
+function spawnExplosion(pos, R, hot = 0xffc04a, style = 'standard') {
+  if (style === 'sparks') spawnDebris(pos, R*.7, 0xffe08a, 14);                 // cosmetics: the shooter's blast style (looks only)
+  else if (style === 'confetti') for (const c of CONFETTI) spawnDebris(pos, R*.35, c, 12);
+  else if (style === 'smoke') { const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 28), new THREE.MeshBasicMaterial({ color: 0x5f5f5a, transparent: true, opacity: .8, depthWrite: false }));
+    ring.rotation.x = -Math.PI/2; ring.position.set(pos.x, pos.y + 1, pos.z); scene.add(ring); effects.push({ kind: 'ring', mesh: ring, t: 0, dur: 1.8, R: R*.9 }); }
   const m = new THREE.Mesh(fireGeo, new THREE.MeshBasicMaterial({ color: hot, transparent: true, opacity: 1, depthWrite: false }));
   m.position.copy(pos); scene.add(m); effects.push({ kind: 'fire', mesh: m, t: 0, dur: .55 + R*.03, R });
   addFlash(pos, 1 + R/8); spawnSmoke(pos, R*.8, 2.4);
@@ -803,9 +843,9 @@ function init(d) {
   S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
   S.P = d.players.map(p => {
     const c = COLORS[p.seat], label = document.createElement('div');
-    label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div><div class="bar"><i style="background:${c.css}"></i></div>`;
+    label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div>${p.title ? `<div class="ttl">${esc(p.title)}</div>` : ''}<div class="bar"><i style="background:${c.css}"></i></div>`;
     $('#labels').appendChild(label);
-    const P = { ...p, color: c, tank: makeTank(c.hex), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
+    const P = { ...p, color: c, tank: makeTank(c.hex, p.cos), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
     P.hullYaw = P.yaw; P.tank.hull.rotation.y = -P.yaw*D2R;
     return P;
   });
@@ -1119,7 +1159,8 @@ function updateEvent(dt) {
         const sz = pr.bomblet ? .3 : P ? WEAPONS[pl.aim.weapon].size : .75;
         pr.mesh = new THREE.Mesh(new THREE.SphereGeometry(sz, 12, 8), new THREE.MeshStandardMaterial({ color: P ? 0x1d1d1d : 0x5a1a00, emissive: col.hex, emissiveIntensity: P ? .5 : 1.4 }));
         pr.mesh.castShadow = true; scene.add(pr.mesh);
-        pr.trail = new Trail(col.hex, .8); (P ? P.trails : envTrails).push(pr.trail);
+        const tr = P && P.cos ? P.cos.trail : null;          // cosmetics: the shooter's trail (team colour unless they chose one)
+        pr.trail = new Trail(tr && tr.color ? new THREE.Color(tr.color).getHex() : col.hex, .8, tr ? tr.style : 'line'); (P ? P.trails : envTrails).push(pr.trail);
         if (!P) { const o = pr.path[0]; spawnSmoke(new THREE.Vector3(o[0], o[1], o[2]), 4*MS, 2.5, 0x4a3a34, 5); }
       }
       const local = pl.T - pr.t0, path = pr.path, ts = pr.ts, L = path.length;
@@ -1130,7 +1171,7 @@ function updateEvent(dt) {
         pr.done = true; scene.remove(pr.mesh); pr.mesh.geometry.dispose();
         if (pr.end === 'split') { addFlash(pr.mesh.position, .4); noise(.2, 2000, .3); }
         else if (pr.end === 'oob' && !pr.bomblet && P) banner('Out of range!', 1200);
-        if (pr.boom) boom(pr.boom, !P);
+        if (pr.boom) boom(pr.boom, !P, P && P.cos ? P.cos.blast.style : 'standard');
         continue;
       }
       const a = path[pr.seg], b = path[pr.seg + 1], span = ts[pr.seg + 1] - ts[pr.seg], u = span > 0 ? (local - ts[pr.seg]) / span : 1;
@@ -1159,14 +1200,14 @@ function updateEvent(dt) {
   }
   if (pl.phase === 'end') { pl.t += dt; if (pl.t > pl.wait) endEvent(); }
 }
-function boom(b, lava) {
+function boom(b, lava, style = 'standard') {
   const pos = new THREE.Vector3(b.x, b.y, b.z);
   if (b.splash) { spawnSplash(pos, b.vr); sndSplash(); }
   else if (b.mound) {                                   // Earthmover: the ground heaves up
     AT.raise(VT, b.x, b.z, b.vr, 5, 2); updateTerrainMesh();
     spawnSmoke(pos, b.vr*1.1, 2.6, 0x8a7458, 2.5); spawnDebris(pos, 5, 0x6a5238, 7); sndBoom(.5); addFlash(pos, .5);
   }
-  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : b.fire ? 0xff6a1a : 0xffc04a); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
+  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : b.fire ? 0xff6a1a : 0xffc04a, style); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
   if (b.fire) addFire(b.fire);
   for (const h of b.hits) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); if (h.abs) shieldHit(h.seat);
     popup(h.dmg ? `-${h.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), h.dmg ? Q.color.css : '#6cc6ff'); }

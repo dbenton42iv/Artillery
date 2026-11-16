@@ -22,7 +22,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/game.css?v=7">
+<link rel="stylesheet" href="assets/game.css?v=8">
 </head>
 <body>
 <div id="game" data-match="<?= $mid ?>" data-csrf="<?= h(csrf_token()) ?>" data-user="<?= (int)$u['id'] ?>"></div>
@@ -76,6 +76,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 
 <script src="assets/vendor/three.min.js"></script>
 <script src="assets/terrain.js?v=4"></script>
-<script src="assets/game.js?v=15"></script>
+<script src="assets/camo.js?v=1"></script>
+<script src="assets/game.js?v=16"></script>
 </body>
 </html>

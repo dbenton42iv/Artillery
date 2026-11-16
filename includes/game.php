@@ -3,6 +3,7 @@ declare(strict_types=1);
 defined('ART3D') || exit;
 require_once __DIR__ . '/engine.php';
 require_once __DIR__ . '/migrate.php';
+require_once __DIR__ . '/cosmetics.php';
 ensure_schema();
 
 /* =====================================================================
@@ -185,6 +186,7 @@ function create_match(array $group, int $mode, ?string $mapId = null, array $opt
     }
     [$wa, $ws] = initial_wind($rules);
     $los = group_loadouts($group, $rules, $opt);           // phase 4: each tank's doctrine and perks, checked against its level
+    $cos = group_cosmetics($group);                         // and how it looks (paint, barrel, trail, blast, title)
     $pdo = db();
     $pdo->beginTransaction();
     FX::reset();
@@ -198,12 +200,12 @@ function create_match(array $group, int $mode, ?string $mapId = null, array $opt
         ->execute([$mode, $gm, $mapId, json_encode($rules, JSON_PRESERVE_ZERO_FRACTION), json_encode($gen['objects'], JSON_PRESERVE_ZERO_FRACTION),
                    json_encode(FX::$e, JSON_PRESERVE_ZERO_FRACTION), $t->pack(), $wa, $ws, time() + turn_secs_for($rules, $tanks[0]) + LOAD_GRACE]);
     $mid = (int)$pdo->lastInsertId();
-    $ins = $pdo->prepare('INSERT INTO ' . T('match_players') . ' (match_id, seat, user_id, hp, x, y, z, ammo_heavy, ammo_cluster, loadout, rating_before, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+    $ins = $pdo->prepare('INSERT INTO ' . T('match_players') . ' (match_id, seat, user_id, hp, x, y, z, ammo_heavy, ammo_cluster, loadout, cosmetics, rating_before, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
     foreach ($group as $seat => $g) {
         $mods = $tanks[$seat]['sk'];
         $ins->execute([$mid, $seat, $g['user_id'], $tanks[$seat]['max_hp'], $pos[$seat][0], $pos[$seat][1], $pos[$seat][2],
                        (int)($mods['heavy'] ?? START_AMMO['heavy']), (int)($mods['cluster'] ?? START_AMMO['cluster']),
-                       json_encode($los[$seat]), $g['rating'], time()]);
+                       json_encode($los[$seat]), json_encode($cos[$seat]), $g['rating'], time()]);
     }
     $pdo->commit();
     return $mid;
@@ -736,7 +738,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $m = $st->fetch();
     if (!$m) return null;
     $st = db()->prepare('SELECT p.seat, p.user_id, u.username, u.alias, u.xp AS user_xp, p.hp, p.alive, p.x, p.y, p.z, p.ammo_heavy, p.ammo_cluster, p.item, p.strikes,
-            p.placement, p.damage_dealt, p.kills, p.rating_before, p.rating_after, p.last_seen, p.loadout, p.xp, p.xp_detail
+            p.placement, p.damage_dealt, p.kills, p.rating_before, p.rating_after, p.last_seen, p.loadout, p.xp, p.xp_detail, p.cosmetics
         FROM ' . T('match_players') . ' p JOIN ' . T('users') . ' u ON u.id = p.user_id WHERE p.match_id=? ORDER BY p.seat');
     $st->execute([$mid]);
     $now = time();
@@ -759,6 +761,8 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
         $r['loadout'] = loadout_public($lo);
         $r['max_hp'] = loadout_hp($lo); $r['max_power'] = (float)($mods['max_power'] ?? 100); $r['arc'] = (float)($mods['arc'] ?? 1);
         $r['spotter'] = !empty($mods['spotter']); $r['clock'] = (int)($mods['clock'] ?? 0);
+        $r['cos'] = cosmetics_public(json_decode((string)($p['cosmetics'] ?? ''), true) ?: null);   // looks only (older matches: default)
+        $r['title'] = $r['cos']['title']['text'];
         if ($r['seat'] === $mySeat && $p['xp'] !== null) $r['xp'] = json_decode((string)$p['xp_detail'], true) ?: ['total' => (int)$p['xp']];
         return $r;
     }, $st->fetchAll());

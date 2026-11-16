@@ -180,6 +180,21 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   for missed turns loses the finishing and win XP. Level *n* needs 50 + 25×*n* XP to reach the next (levels run to 50;
   level 14, every skill, takes about 22 matches). The lobby shows your level and progress; the end of each battle shows
   what it earned and any skills a new level unlocked. Computer players earn nothing; a match the admin ends earns nothing.
+- **Garage (cosmetics):** `garage.php`, linked from the lobby profile, changes how your tank looks to everyone in battle.
+  Looks only: nothing here changes a shot, a hit or a replay. A drawing of the tank shows each choice before you save.
+  - **Paint and camo** go on the hull; the turret always keeps your team colour, so tanks stay easy to tell apart.
+    11 solid paints (levels 1–30) and 7 camos, one per map. A camo unlocks at its level *or* after 3 wins on its map
+    against other players (vs AI wins don't count), e.g. Woodland: level 8 or 3 Highlands wins.
+  - **Barrel:** Standard, Stubby (L3), Long gun (L7), Twin (L15).
+  - **Shell trail:** team colour or a colour (levels 1–13), Smoke rings (L10), Sparks (L18), Rainbow (L28).
+  - **Blast:** Standard, Spark shower (L11), Smoke ring (L19), Confetti (L35), added to the normal explosion.
+  - **Title** shown over your tank and on the leaderboard: Gunner (L5), Bombardier (L10), Artillerist (L15),
+    Siege Engineer (L20), Thunderer (L25), Master Gunner (L30), Iron Rain (L40), Legend (L50); and one per map for
+    10 wins there against other players (Highlander, Island Hopper, Canyon Runner, Volcano Tamer, Ice Breaker,
+    Street Fighter, Moonwalker).
+  Your choice is fixed for each match when it starts (changing it mid-battle takes effect next match). Computer players
+  and matches from before the upgrade use the default look. Unlocks are worked out from your level and wins each time,
+  so nothing to grant or reset.
 - **Missed turns:** if your clock runs out, your turn is skipped. Three missed turns in a row and you
   are removed from the match. The *Leave* button forfeits the match.
 - **Practice:** `practice.html` is the offline version (hot-seat and CPU opponents, no rating).
@@ -290,10 +305,13 @@ admin.php            → admin page: end stuck matches, clear the queue, close r
                        how often each loadout wins ranked matches
 api/forfeit.php      → leave a match
 api/loadout.php      → your level, XP and loadout; save a loadout (presets, or a custom build of unlocked skills)
+garage.php           → the garage: paint, camo, barrel, trail, blast and title (looks only)
+api/cosmetics.php    → what you've unlocked and chosen; save a choice
 includes/            → config, database, game engine, map recipes, power-ups (items.php), private rooms
-                       (rooms.php), computer players (ai.php), skills, loadouts, XP and levels (skills.php),
+                       (rooms.php), computer players (ai.php), skills, loadouts, XP and levels (skills.php), cosmetics (cosmetics.php),
                        matchmaking (web access blocked)
 tests/               → php tests/names_test.php (name filter)
+                       php tests/cosmetics_test.php (garage items and unlock rules)
                        php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
                          the browser's drive preview plans exactly the route the server drives)
                        php tests/crate_gate.php /tmp/s.json   (paired crates: same distance from each tank, nearer its own, reachable;
