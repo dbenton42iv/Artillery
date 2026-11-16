@@ -93,7 +93,7 @@ function schema_sql(string $p): array
   match_id INT UNSIGNED NOT NULL,
   turn_no INT UNSIGNED NOT NULL,
   seat TINYINT UNSIGNED NOT NULL,
-  type ENUM('shot','skip','forfeit','turn','item','move') NOT NULL,
+  type ENUM('shot','skip','forfeit','turn','item','move','hold') NOT NULL,
   payload MEDIUMTEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY ix_match_id (match_id, id),

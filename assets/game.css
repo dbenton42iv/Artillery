@@ -215,6 +215,10 @@ a.big{display:inline-block;text-decoration:none}
 
 /* ---- phase 3: driving ---- */
 .wep.drive{border-color:rgba(123,211,137,.55)}
+.wep.hold{border-color:rgba(185,179,255,.7);background:rgba(185,179,255,.14)}
+.wep.hold[hidden]{display:none}
+.wep.hold i{font-style:normal;color:#b9b3ff;margin-right:5px}
+.prow .it.ck{color:#b9b3ff}
 .wep.drive i{font-style:normal;color:#7bd389;margin-right:5px}
 .wep.drive.on{border-color:#7bd389;background:rgba(123,211,137,.22)}
 #fire.drv{background:#3f8a4a;box-shadow:0 3px 0 #1f5a28}

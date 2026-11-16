@@ -36,7 +36,16 @@ const ITEMS = {
   rangefinder: { name: 'Rangefinder',    kind: 'instant', icon: '⌖', color: '#9be7c4', tip: 'Your aim arc shows the whole flight, wind included, for 1 shot' },
   flare:       { name: 'Flare',          kind: 'instant', icon: '✷', color: '#fff3a0', tip: 'Night maps only' },
   relocate:    { name: 'Relocate',       kind: 'turn',    icon: '⤧', color: '#e9a0ff', tip: 'Moves your tank 40 m or more to a random spot. Uses your turn' },
+  cloak:       { name: 'Invisibility',   kind: 'instant', icon: '◌', color: '#b9b3ff', tip: 'Enemies lose sight of you for 2 rounds: drive unseen, Hold fire to stay hidden. Firing reveals you' },
 };
+/* Invisibility: is this tank hidden (S.fx.cloak from the server), and how many of its own turns are left. */
+const cloakOf = seat => (S.fx && S.fx.cloak && S.fx.cloak[seat]) || null;
+function setCloak(seat, on) { if (!S.fx) S.fx = {}; if (!S.fx.cloak || Array.isArray(S.fx.cloak)) S.fx.cloak = {}; if (on) S.fx.cloak[seat] = { left: 2 }; else delete S.fx.cloak[seat]; }
+/** Your own hidden tank shows as a ghost (see-through); others' hidden tanks aren't drawn at all. */
+function ghost(P, on) {
+  if (P.ghost === on) return; P.ghost = on;
+  P.tank.group.traverse(o => { if (o.isMesh) { o.material.transparent = on; o.material.opacity = on ? .3 : 1; o.material.depthWrite = !on; o.castShadow = !on; } });
+}
 const MODE_NAMES = { ranked: 'RANKED', casual: 'CASUAL', private: 'PRIVATE', ai: 'VS AI' };
 const AI_NAMES = { rookie: 'Rookie', veteran: 'Veteran', ace: 'Ace' };
 const VMAX = 75, STEP = 1 / 120, PATH_EVERY = 4, TIME_SCALE = 1.45, TURRET_H = 2.05, BARREL = 3.2, D2R = Math.PI / 180;
@@ -658,6 +667,10 @@ function syncDriveUI(me, mine) {
 /** Replay a 'move' event: the tank drives along the recorded path, kicking up dust. */
 function startMoveEvent(e) {
   const d = e.data, P = S.P[e.seat];
+  if (d.hidden) {                                    // an invisible tank drove somewhere: only that it moved
+    for (const c of d.pickup || []) removeCrate(c.id, 'claimed', c.by, c.item);
+    banner(`${P.name} moves, unseen`, 1200); S.playing = { kind: 'msg', t: 0, dur: 1 }; syncUI(); return;
+  }
   if (e.seat === S.me) { DRV.on = false; clearPreview(); if (DEV.phone) setDrawer(true); }
   const pts = d.path.map(p => new THREE.Vector3(p[0], p[1], p[2])), cum = [0];
   for (let k = 1; k < pts.length; k++) cum.push(cum[k-1] + pts[k].distanceTo(pts[k-1]));
@@ -949,7 +962,7 @@ async function poll() {
     netFails = 0; netBar(null);
     if (!S.loaded) { try { init(d); } catch (e) { recover(e, 'load'); return; } }
     else {
-      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item' || e.type === 'move')) S.sent = false; }
+      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item' || e.type === 'move' || e.type === 'hold')) S.sent = false; }
       S.snap = d;
       if (!S.playing && !S.queue.length) applySnap(d);
     }
@@ -972,7 +985,7 @@ const ERR = { not_your_turn: "It isn't your turn.", stale_turn: 'That turn alrea
               no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.',
               no_item: "You don't have that power-up.", full_hp: 'Your tank is already at full health.', no_spot: 'No clear spot to move to. Try again later.',
               mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.',
-              no_fuel: 'No driving left this turn.', cant_drive: "Can't drive that way.", no_driving: 'Driving is off in this match.',
+              no_fuel: 'No driving left this turn.', not_cloaked: 'You can only hold fire while invisible.', cant_drive: "Can't drive that way.", no_driving: 'Driving is off in this match.',
               server_error: 'The server had a problem. Try again.', network: 'Network error. Try again.' };
 async function useItem() {
   const me = S.P[S.me]; if (!myTurn() || !me || !me.item) return;
@@ -1009,11 +1022,18 @@ function startEvent(e) {
     P.hp = 0; setDead(P, true); syncUI(); S.playing = { kind: 'msg', t: 0, dur: 1.8 }; return;
   }
   const d = e.data;
+  if (e.type === 'hold') {
+    banner(e.seat === S.me ? 'You hold fire and stay hidden' : `${P.name} holds fire`, 1600); S.playing = { kind: 'msg', t: 0, dur: 1.4 }; syncUI(); return;
+  }
   if (e.type === 'item') { startItemEvent(e); return; }
   if (e.type === 'move') { startMoveEvent(e); return; }
   AT.applyAll(AUTH, d.ops);                         // the exact terrain, in server order
   if (d.wind) S.wind = { ang: Math.atan2(d.wind[0], -d.wind[1]), spd: Math.hypot(d.wind[0], d.wind[1]) };
   if (e.type === 'turn') { startTurnEvent(e); return; }
+  if (d.reveal) {                                    // an invisible tank fires: it shows where it really is
+    [P.x, P.y, P.z] = d.reveal; setCloak(e.seat, false); spawnSmoke(new THREE.Vector3(P.x, P.y + 2, P.z), 3, 1.4, 0xb9b3ff, 3);
+    if (e.seat !== S.me) banner(`${P.name} reappears!`, 1500);
+  }
   if (d.aim && ITEMS[d.aim.weapon]) { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
   if (d.double) banner(e.seat === S.me ? 'Double Shot: fire again!' : `${P.name}: Double Shot`, 1500);
   if (e.seat === S.me) recordShot(e);
@@ -1084,6 +1104,11 @@ function startItemEvent(e) {
   let dur = 1.4;
   if (d.item === 'repair') { P.hp = Math.min(maxHp(P), P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
   else if (d.item === 'shield') { setShield(e.seat, true); shieldHit(e.seat); noise(.6, 900, .25, 1); }
+  else if (d.item === 'cloak') {
+    setCloak(e.seat, true); spawnSmoke(at.clone().setY(P.y + 2), 3.4, 1.6, 0xb9b3ff, 3); noise(.7, 600, .25, 1);
+    banner(e.seat === S.me ? 'You vanish! Drive unseen, then Hold fire to stay hidden' : `${P.name} vanished!`, 2200);
+    S.playing = { kind: 'msg', t: 0, dur: 1.8 }; syncUI(); return;
+  }
   else if (d.item === 'relocate') {
     const from = new THREE.Vector3(...d.from); spawnSmoke(from, 4, 2.2, 0xcfc8d8, 3); spawnSmoke(from.clone().setY(from.y + 3), 3, 1.8, 0xcfc8d8, 4);
     P.reloc = { t: 0, to: d.to }; P.x = d.to[0]; P.z = d.to[2]; P.y = d.to[1] + 40; dur = 2.6;
@@ -1098,6 +1123,8 @@ function startTurnEvent(e) {
   const d = e.data, msgs = [];
   envTrails.forEach(t => t.dispose()); envTrails = [];
   for (const s of d.shield_end || []) setShield(s, false);
+  for (const c of d.cloak_end || []) { const Q = S.P[c.seat]; [Q.x, Q.y, Q.z] = c.at; setCloak(c.seat, false);
+    msgs.push(c.seat === S.me ? "You're visible again" : `${Q.name} is visible again`); }
   for (const b of d.burn || []) { const Q = S.P[b.seat]; Q.hp = Math.max(0, Q.hp - b.dmg); if (b.abs) shieldHit(b.seat);
     popup(b.dmg ? `-${b.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff9a4a'); }
   for (const id of d.fire_end || []) removeFire(id);
@@ -1234,8 +1261,26 @@ function buildWeaponButtons() {
   if ((S.map && S.map.move) > 0) {
     const db = document.createElement('button'); db.className = 'wep drive'; db.id = 'driveBtn'; db.onclick = () => setDrive(!DRV.on); w.appendChild(db);
   }
+  {
+    const hb = document.createElement('button'); hb.className = 'wep hold'; hb.id = 'holdBtn'; hb.hidden = true; hb.onclick = holdFire;
+    hb.title = 'End your turn without firing, so you stay hidden'; w.appendChild(hb);
+  }
 }
 function selectWeapon(k) { const me = S.P[S.me]; if (!me || !myTurn() || me.ammo[k] === 0) return; S.aim.weapon = k; syncUI(); }
+function syncHoldButton(me, mine) {
+  const b = $('#holdBtn'); if (!b) return;
+  const on = !!cloakOf(S.me) && !me.dead;
+  b.hidden = !on; b.disabled = !mine || S.sent;
+  b.innerHTML = `<span><i>◌</i>Hold fire</span><kbd>stay hidden${DEV.touch ? '' : ' · H'}</kbd>`;
+}
+async function holdFire() {
+  if (!myTurn() || !cloakOf(S.me)) return;
+  ac(); S.sent = true; setDrive(false, true); syncUI();
+  try {
+    const res = await post('api/hold.php', { match_id: MID, turn_no: S.match.turn });
+    if (res.error) { S.sent = false; banner(ERR[res.error] || 'Could not hold fire', 2200); syncUI(); }
+  } catch (e) { S.sent = false; banner('Network error. Try again.', 2000); syncUI(); }
+}
 function syncItemButton(me, mine) {
   const b = $('#itemBtn'); if (!b) return;
   const it = me.item ? ITEMS[me.item] : null;
@@ -1268,7 +1313,7 @@ function syncUI() {
   $('#boardStatus').innerHTML = boardStatus();
   $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
-    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4" title="Holding a power-up (only they know which)">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
+    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4" title="Holding a power-up (only they know which)">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}${cloakOf(q.seat) && !q.dead ? '<span class="it ck" title="Invisible: you can\'t see where this tank is">◌</span>' : ''}</div>
     <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
     <div class="hp"><i style="width:${hpPct(q)}%;background:${hpPct(q) > 50 ? '#7bd389' : hpPct(q) > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
   if (!me) return;
@@ -1278,13 +1323,14 @@ function syncUI() {
   $('#whoName').style.color = mine ? me.color.css : name ? name.color.css : '';
   const dbl = S.fx && S.fx.double, second = dbl && dbl.seat === m?.seat && dbl.shots > 0, armed = dbl && dbl.seat === m?.seat && !dbl.shots;
   $('#whoTag').textContent = !m ? '' : m.status === 'finished' ? 'Battle over' : me.dead ? 'You were destroyed. Watching the battle.'
-    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : S.lastSpot ? 'Last shot: ' + spotText(S.lastSpot) : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
+    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : cloakOf(S.me) ? `Invisible (${cloakOf(S.me).left > 1 ? 'this turn and next' : 'this turn'}). Firing reveals you` : S.lastSpot ? 'Last shot: ' + spotText(S.lastSpot) : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
   $('#panel').classList.toggle('off', !mine);
   $('#fire').disabled = !mine;
   document.querySelectorAll('.wep[data-k]').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
     b.classList.toggle('on', S.aim.weapon === k); b.disabled = a === 0;
     b.innerHTML = `<span>${WEAPONS[k].name}</span><kbd>${a == null ? '∞' : '×' + a}${DEV.touch ? '' : ' · ' + WEAPONS[k].key}</kbd>`; });
   syncItemButton(me, mine);
+  syncHoldButton(me, mine);
   syncDriveUI(me, mine);
   $('#forecast').innerHTML = forecastHtml();
   renderCards();
@@ -1398,6 +1444,7 @@ addEventListener('keydown', e => {
   else if (k === 'escape') setDrive(false);
   else if (k === '1' || k === '2' || k === '3') selectWeapon(WKEYS[+k - 1]);
   else if (k === '4') useItem();
+  else if (k === 'h') holdFire();
   else if (k === 'v') camOverview(); else if (k === 'c') $('#bCam').click(); else if (k === 'm') $('#bMute').click();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
@@ -1427,14 +1474,17 @@ function updateVisuals(dt, time) {
   if (mine && me) { me.yaw = S.aim.yaw; me.elev = S.aim.elev; }
   for (const P of S.P) {
     const t = P.tank; t.group.position.set(P.x, P.y, P.z); t.hull.rotation.y = -P.hullYaw*D2R;
+    const hid = !!cloakOf(P.seat) && !P.dead && S.match && S.match.status === 'active';
+    t.group.visible = !(hid && P.seat !== S.me); ghost(P, hid && P.seat === S.me);
     t.turret.rotation.y = -P.yaw*D2R; if (!P.dead) t.pivot.rotation.x = P.elev*D2R;
     const s = project(v3.set(P.x, P.y + 4.6, P.z));
-    if (!s.vis) P.label.style.display = 'none';
+    if (!s.vis || !t.group.visible) P.label.style.display = 'none';
     else { P.label.style.display = ''; P.label.style.left = s.x + 'px'; P.label.style.top = s.y + 'px';
       P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = hpPct(P) + '%'; }
   }
   const m = S.match, cur = m && m.status === 'active' && !S.playing && !S.queue.length ? S.P[m.seat] : null;
-  if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
+  if (cur && cur.seat !== S.me && cloakOf(cur.seat)) marker.visible = false;
+  else if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
   else marker.visible = false;
   updateDriveVisuals(mine, time);
   if (mine && !DRV.on) {

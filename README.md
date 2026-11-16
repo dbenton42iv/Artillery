@@ -131,9 +131,21 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   | Double Shot | fire two shells this turn, each with its own aim | no |
   | Rangefinder | your aim arc shows the whole flight, wind included, for 1 shot | no |
   | Relocate | moves your tank to a random spot at least 40 m away; uses your turn | no |
+  | Invisibility | enemies lose sight of your tank for 2 rounds (see below) | no |
   | Flare | night maps only: arrives with Scenarios (never drops yet) | no |
 
   Using a power-up doesn't cost your turn, except Relocate. Shell power-ups are loaded from the slot and fired.
+- **Invisibility:** your tank vanishes from other players' screens until the start of your own turn 2 rounds later
+  (the turn you use it, the enemies' turns, your next turn and the enemies' turns after it). You see it as a ghost.
+  - **Firing reveals you**, from wherever you really are. While hidden, a **Hold fire** button (key H) ends your turn
+    without firing, so you stay hidden; it isn't a missed turn.
+  - You can **drive unseen**: others only learn that you moved, never where. Enemies see a ◌ by your name and your
+    tank where it vanished.
+  - It's still there: a shell that lands on it hits it as usual. Picking up a crate shows that crate going.
+  - While hidden you get no crate in a supply drop (where it landed would give you away), Spotter doesn't report
+    against you, and computer players aim at where you vanished. Computer players use it when hurt: they vanish,
+    drive away unseen and hold fire, then fire on their next turn.
+  - The server never sends a hidden tank's position or route to anyone else while the battle runs.
 - **Ranked crates** only hold the six ranked-safe power-ups.
 - **Names:** players log in with their username but can choose a different name for others to see
   (*Change name* in the lobby). Names are 3–20 characters and can change once a day, never during a battle.
@@ -304,6 +316,7 @@ api/move.php         → drive before you fire (server plans the route; doesn't 
 admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart"); ban or pause players;
                        how often each loadout wins ranked matches
 api/forfeit.php      → leave a match
+api/hold.php         → Hold fire: end your turn without firing, while invisible
 api/loadout.php      → your level, XP and loadout; save a loadout (presets, or a custom build of unlocked skills)
 garage.php           → the garage: paint, camo, barrel, trail, blast and title (looks only)
 api/cosmetics.php    → what you've unlocked and chosen; save a choice
@@ -312,6 +325,7 @@ includes/            → config, database, game engine, map recipes, power-ups (
                        matchmaking (web access blocked)
 tests/               → php tests/names_test.php (name filter)
                        php tests/cosmetics_test.php (garage items and unlock rules)
+                       php tests/cloak_test.php (Invisibility: how long it lasts, reveals, drops)
                        php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
                          the browser's drive preview plans exactly the route the server drives)
                        php tests/crate_gate.php /tmp/s.json   (paired crates: same distance from each tank, nearer its own, reachable;

@@ -6,6 +6,18 @@ require_once __DIR__ . '/names.php';
  * Brings an existing install's tables up to date, so an upgrade is just "upload the new files".
  * The check is two zero-row queries per request; the ALTERs run once, under a lock.
  */
+/** The 'hold' event type (Invisibility's Hold fire). Checked on upgrade, and before a Hold fire in case an install
+ * took the cosmetics columns without it. Runs outside any transaction (an ALTER would end one). */
+function ensure_hold_event(): void
+{
+    static $ok = false;
+    if ($ok) return;
+    $col = db()->query('SHOW COLUMNS FROM ' . T('match_events') . " LIKE 'type'")->fetch();
+    if ($col && strpos((string)$col['Type'], "'hold'") === false)
+        db()->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move','hold') NOT NULL");
+    $ok = true;
+}
+
 function ensure_schema(): void
 {
     static $done = false;
@@ -79,6 +91,7 @@ function ensure_schema(): void
         if (in_array('cosmetics', $need, true)) {                // paint, barrels, trails, blasts, titles
             if (!in_array('cosmetics', $cols('users'), true)) $pdo->exec('ALTER TABLE ' . T('users') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
             if (!in_array('cosmetics', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
+            ensure_hold_event();                                 // and Hold fire (Invisibility), from the same release
         }
         if (in_array('bans', $need, true)) {                     // admins can ban or pause players
             $have = $cols('users'); $add = [];

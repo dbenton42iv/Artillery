@@ -941,6 +941,17 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         foreach ($gone as $s) unset(FX::$e['shields'][$s]);
         if ($gone) { $out['shield_end'] = $gone; $did = true; }
     }
+    if (!empty(FX::$e['cloak'])) {                                    // invisibility wears off at the start of its tank's 3rd turn
+        foreach (FX::$e['cloak'] as $s => $c) {
+            $s = (int)$s;
+            if (!$players[$s]['alive']) { unset(FX::$e['cloak'][$s]); continue; }
+            if ($s !== $seat) continue;
+            if (--FX::$e['cloak'][$s]['left'] > 0) continue;
+            unset(FX::$e['cloak'][$s]);
+            $out['cloak_end'][] = ['seat' => $s, 'at' => [round($players[$s]['x'], 3), round($players[$s]['y'], 3), round($players[$s]['z'], 3)]];
+            $did = true;
+        }
+    }
     if ($rules['erupt_every'] > 0 && $turn % $rules['erupt_every'] === 0 && $rules['vent']) {
         [$vx, $vz] = $rules['vent']; $g = (float)$rules['gravity']; $s = $t->half / 120;
         $o = [(float)$vx, $t->heightAt($vx, $vz) + 2, (float)$vz]; $projs = [];
@@ -1154,7 +1165,8 @@ function drop_paired(Terrain $t, array $players, array &$objects, array $rules, 
     if (!item_pool((string)($rules['items'] ?? 'off'))) return [];
     $waiting = [];
     foreach ($objects as $o) if ($o['type'] === 'crate' && $o['state'] === 'live' && isset($o['for'])) $waiting[(int)$o['for']] = true;
-    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']])));
+    // an invisible tank gets no crate this drop: where its crate lands would give it away
+    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']]) && !isset(FX::$e['cloak'][$p['seat']])));
     if (!$seats) return [];
     $near = (float)($rules['crate_near'] ?? CRATE_NEAR);
     // one distance for everyone in this drop; spots each tank can drive to if possible, otherwise (a tank dug into
@@ -1354,6 +1366,10 @@ function item_effect(?Terrain $t, array &$players, array $objects, int $seat, st
         case 'rangefinder':
             if (!in_array($seat, FX::$e['range'], true)) FX::$e['range'][] = $seat;
             break;
+        case 'cloak':
+            if (isset(FX::$e['cloak'][$seat])) return ['error' => 'already_on'];
+            FX::$e['cloak'][$seat] = ['left' => CLOAK_ROUNDS, 'turn' => $turn, 'seen' => [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)]];
+            break;
         case 'relocate':
             if (sk($me, 'dug_in', false)) return ['error' => 'dug_in'];
             $to = relocate_spot($t, $players, $objects, $seat);
@@ -1373,6 +1389,17 @@ function item_effect(?Terrain $t, array &$players, array $objects, int $seat, st
  * $long: metres past (+) or short of (−) the enemy; $right: metres right (+) or left (−) of the line, seen from the
  * shooter. A Cluster shell counts where its bomblets landed on average. Null if it left the map or no enemy is left.
  */
+/** Is $seat invisible right now? */
+function cloaked(int $seat): bool { return isset(FX::$e['cloak'][$seat]); }
+
+/** The tank fires: invisibility ends. Returns where it is (for everyone's replay), or null if it wasn't hidden. */
+function cloak_reveal(array $players, int $seat): ?array
+{
+    if (!cloaked($seat)) return null;
+    unset(FX::$e['cloak'][$seat]);
+    return [round($players[$seat]['x'], 3), round($players[$seat]['y'], 3), round($players[$seat]['z'], 3)];
+}
+
 function spot_report(array $players, int $seat, array $res, array $enemies): ?array
 {
     $booms = [];

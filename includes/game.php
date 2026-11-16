@@ -572,7 +572,9 @@ function take_shot(int $mid, int $uid, array $in): array
         $t = Terrain::unpack($m['terrain'], $m['rules']['water']);
         $wind = wind_vec((float)$m['wind_ang'], (float)$m['wind_spd']);
         $before = json_encode($m['objects']);          // buildings take damage; crates are claimed, wrecked or settle
-        $enemies = array_keys(array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat));
+        // Spotter doesn't report against an invisible tank (it would give it away)
+        $enemies = array_keys(array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat && !cloaked($p['seat'])));
+        $reveal = cloak_reveal($players, $seat);       // firing ends invisibility, from where the tank really is
         $res = simulate_shot($t, $players, $m['objects'], $seat, $yaw, $elev, $power, $wk, $wind, $m['rules']);
         if (json_encode($m['objects']) !== $before) $m['objects_dirty'] = true;
         if (sk($players[$seat], 'spotter', false) && ($sp = spot_report($players, $seat, $res, $enemies))) $res['spot'] = $sp;
@@ -580,6 +582,7 @@ function take_shot(int $mid, int $uid, array $in): array
         $res['aim'] = ['yaw' => $yaw, 'elev' => $elev, 'power' => $power, 'weapon' => $wk];
         $res['wind'] = $wind;
         if ($first) $res['double'] = 1;
+        if ($reveal) $res['reveal'] = $reveal;
         $eid = add_event($m, $seat, 'shot', $res);
         if ($first && $players[$seat]['alive'] && !battle_over($m, $players)) {
             // Double Shot: the same tank fires again before the turn passes
@@ -633,6 +636,38 @@ function use_item(int $mid, int $uid, array $in): array
     } catch (Throwable $e) { $pdo->rollBack(); throw $e; }
 }
 
+/**
+ * Hold fire: an invisible tank ends its turn without firing, so it stays hidden. Body: {"match_id", "turn_no"}.
+ * Only while invisible (otherwise every turn ends with a shot, a power-up that uses the turn, or the clock).
+ */
+function hold_fire(int $mid, int $uid, array $in): array
+{
+    if (!isset($in['turn_no']) || !is_numeric($in['turn_no'])) return ['error' => 'bad_input'];
+    ensure_hold_event();
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $m = lock_match($mid);
+        if (!$m || $m['status'] !== 'active') { $pdo->commit(); return ['error' => 'not_active']; }
+        if ((int)$in['turn_no'] !== (int)$m['turn_no']) { $pdo->commit(); return ['error' => 'stale_turn']; }
+        if (time() > (int)$m['turn_deadline'] + 2) { $pdo->commit(); return ['error' => 'too_late']; }
+        $players = load_players($mid);
+        $seat = (int)$m['current_seat'];
+        if ($players[$seat]['user_id'] !== $uid) { $pdo->commit(); return ['error' => 'not_your_turn']; }
+        if (!cloaked($seat)) { $pdo->commit(); return ['error' => 'not_cloaked']; }
+        $dbl = FX::$e['double'];
+        if ($dbl && $dbl['seat'] === $seat && $dbl['shots'] > 0) { $pdo->commit(); return ['error' => 'mid_double']; }
+        $players[$seat]['strikes'] = 0;                  // a choice, not a missed turn
+        $eid = add_event($m, $seat, 'hold', ['left' => (int)FX::$e['cloak'][$seat]['left']]);
+        $t = Terrain::unpack($m['terrain'], $m['rules']['water']);
+        $eid = advance_or_finish($m, $players, $t) ?? $eid;
+        save_players($mid, $players);
+        save_match($m, $t, $eid);
+        $pdo->commit();
+        return ['ok' => true, 'event_id' => $eid];
+    } catch (Throwable $e) { $pdo->rollBack(); throw $e; }
+}
+
 /** Metres $seat may still drive this turn. */
 function move_left(array $m, int $seat): float
 {
@@ -671,6 +706,7 @@ function drive(int $mid, int $uid, array $in): array
         $ev['left'] = round(max(0.0, move_budget($m['rules']) - $used), 2);
         $players[$seat]['strikes'] = 0;                  // driving counts as being at the controls
         $players[$seat]['moved'] = ($players[$seat]['moved'] ?? 0) + $ev['used'];
+        if (cloaked($seat)) $ev['cloaked'] = true;        // other players get only "drove somewhere" (hide_cloaked)
         $eid = add_event($m, $seat, 'move', $ev);
         foreach ($ev['pickup'] ?? [] as $c) { log_item($m, $seat, $c['item'], 'claim'); if ($c['lost']) log_item($m, $seat, $c['lost'], 'replaced'); }
         save_players($mid, $players);
@@ -717,6 +753,18 @@ function add_forecast(array $m, array $players, int $seat, array $turns): array
  * the claimed crates lose 'item' (what was inside) and 'lost' (the power-up it replaced). Everyone still sees who
  * opened which crate. A power-up shows itself only when it's used or fired.
  */
+/**
+ * Invisibility: another player's view of an event. A hidden tank's drive keeps only that it happened (and any crate it
+ * drove over, since that crate disappears for everyone); not the route or where it ended.
+ */
+function hide_cloaked(string $type, int $seat, ?array $d, ?int $viewer): ?array
+{
+    if ($type !== 'move' || !$d || empty($d['cloaked']) || $seat === $viewer) return $d;
+    $out = ['hidden' => true, 'used' => $d['used']];
+    if (!empty($d['pickup'])) $out['pickup'] = $d['pickup'];
+    return $out;
+}
+
 function hide_crate_contents(?array $d, ?int $viewer): ?array
 {
     if (!$d) return $d;
@@ -743,7 +791,9 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $st->execute([$mid]);
     $now = time();
     $bots = match_rules($m)['bots'] ?? [];
-    $players = array_map(function ($p) use ($now, $bots, $mySeat) {
+    FX::reset(json_decode((string)($m['effects'] ?? ''), true) ?: []);
+    $live = $m['status'] === 'active';                  // once a battle is over, nothing is hidden
+    $players = array_map(function ($p) use ($now, $bots, $mySeat, $live) {
         $r = ['seat' => (int)$p['seat'], 'user_id' => (int)$p['user_id'], 'name' => display_name($p), 'hp' => (int)$p['hp'],
               'alive' => (bool)$p['alive'], 'x' => (float)$p['x'], 'y' => (float)$p['y'], 'z' => (float)$p['z'],
               'ammo' => ['shell' => null, 'heavy' => (int)$p['ammo_heavy'], 'cluster' => (int)$p['ammo_cluster']],
@@ -763,6 +813,10 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
         $r['spotter'] = !empty($mods['spotter']); $r['clock'] = (int)($mods['clock'] ?? 0);
         $r['cos'] = cosmetics_public(json_decode((string)($p['cosmetics'] ?? ''), true) ?: null);   // looks only (older matches: default)
         $r['title'] = $r['cos']['title']['text'];
+        if ($live && $r['alive'] && ($c = FX::$e['cloak'][$r['seat']] ?? null)) {   // invisible: others see it where it vanished
+            $r['cloaked'] = (int)$c['left'];
+            if ($r['seat'] !== $mySeat) [$r['x'], $r['y'], $r['z']] = array_map('floatval', $c['seen']);
+        }
         if ($r['seat'] === $mySeat && $p['xp'] !== null) $r['xp'] = json_decode((string)$p['xp_detail'], true) ?: ['total' => (int)$p['xp']];
         return $r;
     }, $st->fetchAll());
@@ -770,7 +824,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $ev = db()->prepare('SELECT id, turn_no, seat, type, payload FROM ' . T('match_events') . ' WHERE match_id=? AND id>? ORDER BY id LIMIT 40');
     $ev->execute([$mid, $since]);
     $events = array_map(fn($e) => ['id' => (int)$e['id'], 'turn' => (int)$e['turn_no'], 'seat' => (int)$e['seat'], 'type' => $e['type'],
-                                   'data' => hide_crate_contents(json_decode($e['payload'], true), $mySeat)], $ev->fetchAll());
+                                   'data' => hide_crate_contents(hide_cloaked($e['type'], (int)$e['seat'], json_decode($e['payload'], true), $live ? $mySeat : (int)$e['seat']), $mySeat)], $ev->fetchAll());
     $out = [
         'match' => ['id' => (int)$m['id'], 'status' => $m['status'], 'turn' => (int)$m['turn_no'], 'seat' => (int)$m['current_seat'],
                     'time_left' => max(0, (int)$m['turn_deadline'] - $now), 'turn_seconds' => turn_secs(match_rules($m)),

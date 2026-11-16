@@ -131,7 +131,14 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
 function ai_decide(Terrain $t, array $players, array $objects, int $seat, array $wind, array $rules, string $level, array $fx, ?array $drive = null): array
 {
     $me = $players[$seat]; $L = AI_LEVELS[$level] ?? AI_LEVELS['veteran']; $item = $me['item'] ?? null;
+    // an invisible enemy: the AI knows only where it vanished, like a player would
+    foreach ($fx['cloak'] ?? [] as $s => $c) if ((int)$s !== $seat && isset($players[(int)$s])) [$players[(int)$s]['x'], $players[(int)$s]['y'], $players[(int)$s]['z']] = $c['seen'];
+    $mine = $fx['cloak'][$seat] ?? null;
+    // its own Invisibility: vanish first, then drive away unseen and hold fire that turn; next turn it fires (and shows)
+    if ($item === 'cloak' && !$mine && $me['hp'] <= 60 && !($fx['double']['shots'] ?? 0)) return ['use' => true];
+    if ($mine && $drive) { $drive['hit'] = true; $L['dodge'] = 1.0; }   // hidden: always slip away
     if ($drive && ($to = ai_drive_plan($t, $players, $objects, $seat, $drive['left'], $drive['hit'], $fx, $L))) return ['move' => $to];
+    if ($mine && (int)$mine['turn'] === (int)($fx['turn'] ?? -1)) return ['hold' => true];
     $kind = $item ? (POWERUPS[$item]['kind'] ?? '') : '';
     $midDouble = $fx['double'] && $fx['double']['seat'] === $seat && $fx['double']['shots'] > 0;
     if ($item && !$midDouble && $kind !== 'shell') {
@@ -139,6 +146,7 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
             'repair' => $me['hp'] <= 70,
             'shield' => $me['hp'] <= 85 || rnd() < .5,
             'relocate' => $me['hp'] <= 35 && rnd() < .7 && !sk($me, 'dug_in', false),
+            'cloak' => false,                                   // used above, when it's hurt
             'flare' => false,
             default => true,                                    // weather, double, rangefinder: use straight away
         };
@@ -282,8 +290,8 @@ function ai_act(int $mid, ?int $shown = null): void
         $players = load_players($mid);
         $t = Terrain::unpack($row['terrain'], $rules['water']);
         $objects = json_decode((string)$row['objects'], true) ?: [];
-        $fx = (json_decode((string)$row['effects'], true) ?: []) + ['double' => null, 'moved' => null, 'fires' => []];
-        $turn = (int)$m['turn_no'];
+        $fx = (json_decode((string)$row['effects'], true) ?: []) + ['double' => null, 'moved' => null, 'fires' => [], 'cloak' => []];
+        $turn = (int)$m['turn_no']; $fx['turn'] = $turn;
         // drive at most once a turn, before anything else; "hit" = damaged by anything since this tank's own last action
         $drive = null;
         $mv = $fx['moved'];
@@ -297,6 +305,8 @@ function ai_act(int $mid, ?int $shown = null): void
             if (!isset($r['error'])) return;
             $plan = ai_decide($t, $players, $objects, $seat, wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], $fx);
         }
+        if (!empty($plan['hold'])) { $r = hold_fire($mid, $uid, ['turn_no' => $turn]); if (!isset($r['error'])) return;
+            $plan = ai_decide($t, $players, $objects, $seat, wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], array_replace($fx, ['cloak' => []])); }
         if (!empty($plan['use'])) {
             $r = use_item($mid, $uid, ['turn_no' => $turn]);
             if (isset($r['error'])) $plan = ai_decide($t, array_replace($players, [$seat => ['item' => null] + $players[$seat]]), $objects, $seat,

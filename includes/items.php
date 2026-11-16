@@ -40,8 +40,13 @@ const POWERUPS = [
     'rangefinder'=> ['name' => 'Rangefinder',    'kind' => 'instant', 'safe' => false, 'weight' => 6,  'short' => 'Aim arc shows the whole flight, wind included'],
     'flare'      => ['name' => 'Flare',          'kind' => 'instant', 'safe' => false, 'weight' => 0,  'short' => 'Night maps only (Scenarios)'],
     'relocate'   => ['name' => 'Relocate',       'kind' => 'turn',    'safe' => false, 'weight' => 2,  'short' => 'Moves your tank 40 m+ at random. Uses your turn'],
+    'cloak'      => ['name' => 'Invisibility',   'kind' => 'instant', 'safe' => false, 'weight' => 6,  'short' => 'Vanish for 2 rounds; firing reveals you'],
 ];
 
+/* Invisibility: enemies stop seeing the tank (where it is, where it drives) until the start of its own turn 2 rounds
+ * later, or until it fires. It is still there: shells hit it as usual. While hidden it can end a turn without firing
+ * (Hold fire, api/hold.php). */
+const CLOAK_ROUNDS = 2;
 const REPAIR_HP = 30, SHIELD_HP = 40, SHIELD_TURNS = 2, FIRE_DMG = 8, FIRE_TURNS = 3, FIRE_R = 6.0, RELOCATE_MIN = 40.0;
 
 /** Which power-ups can drop for a match's item setting: 'all', 'safe' or 'off'. */
@@ -73,14 +78,16 @@ final class FX
     public static array $e = [];
     public static function reset(?array $e = null): void
     {
-        self::$e = ($e ?? []) + ['shields' => [], 'fires' => [], 'double' => null, 'range' => [], 'winds' => [], 'forecast' => [], 'fire_seq' => 0, 'moved' => null];
+        self::$e = ($e ?? []) + ['shields' => [], 'fires' => [], 'double' => null, 'range' => [], 'winds' => [], 'forecast' => [], 'fire_seq' => 0, 'moved' => null, 'cloak' => []];
     }
     /** Public view sent to every player (no wind forecasts). */
     public static function pub(?int $me): array
     {
         $e = self::$e;
         $out = ['shields' => (object)$e['shields'], 'fires' => array_values($e['fires']), 'double' => $e['double'], 'range' => array_values($e['range']),
-                'moved' => $e['moved']];
+                'moved' => $e['moved'],
+                // who is invisible and for how many more of their own turns; never where they are
+                'cloak' => (object)array_map(fn($c) => ['left' => (int)$c['left']], $e['cloak'] ?? [])];
         if ($me !== null && !empty($e['forecast'][$me])) $out['forecast'] = $e['forecast'][$me];
         return $out;
     }
