@@ -84,7 +84,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       <div class="tab" data-pane="ranked">
         <p class="muted">You'll be paired with commanders near your rating. The longer you wait, the wider the search.</p>
         <p class="muted small">Map pool: <?= h(implode(' · ', array_map(fn($m) => MAPS[$m]['name'], ranked_pool()))) ?>. No map repeats until you've played them all this session.
-          Supply crates bring ranked-safe power-ups and land in a circle between the tanks.</p>
+          Every few turns each tank gets its own supply crate (ranked-safe power-ups) close by: drive over it, or shoot anyone's.</p>
       </div>
       <div class="tab" data-pane="casual" hidden>
         <p class="muted">Unrated. Any map, and every power-up in the crates. Try things out without risking your rank.</p>

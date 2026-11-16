@@ -122,6 +122,28 @@ $res = ['projectiles' => [['boom' => ['x' => 3.0, 'z' => -88.0]]]];
 $sp = spot_report($pl, 0, $res, [1]);
 ok('Spotter: 12 m short, 3 m right', $sp['long'] === -12.0 && $sp['right'] === 3.0 && $sp['seat'] === 1, $sp);
 ok('Heavy Gunner: Heavy does 65', shooter_weapon('heavy', $tank(0, 0, $C('heavy')))['dmg'] === 65 && shooter_weapon('heavy', $tank(0, 0))['dmg'] === 70);
+// paired crates: driving over one picks it up; crates don't block driving; Scavenger reaches 3.5 m
+$crateAt = fn(float $x, float $z) => ['id' => 0, 'type' => 'crate', 'x' => $x, 'z' => $z, 'y' => 5.0, 'pool' => 'safe', 'state' => 'live', 'for' => 0];
+FX::reset(); $t = $flat();
+$pl = [0 => $tank(0, 0), 1 => ['seat' => 1] + $tank(80, 80)]; $objs = [$crateAt(0.0, -6.0)];
+$ev = drive_tank($t, $pl, $objs, 0, 0.0, -10.0, 10.0);
+ok('driving over a crate opens it for the driver (and the drive goes on past it)', ($ev['pickup'][0]['by'] ?? null) === 0 && $objs[0]['state'] === 'claimed' && $pl[0]['item'] !== null && abs($pl[0]['z'] + 10) < 1e-6, $ev);
+$pl = [0 => $tank(0, 0), 1 => ['seat' => 1] + $tank(80, 80)]; $objs = [$crateAt(3.0, -6.0)];
+$ev = drive_tank($t, $pl, $objs, 0, 0.0, -10.0, 10.0);
+ok('3 m beside the route: not picked up', empty($ev['pickup']) && $objs[0]['state'] === 'live');
+$pl = [0 => $tank(0, 0, $C('standard', ['scavenger'])), 1 => ['seat' => 1] + $tank(80, 80)]; $objs = [$crateAt(3.0, -6.0)];
+$ev = drive_tank($t, $pl, $objs, 0, 0.0, -10.0, 10.0);
+ok('Scavenger: 3 m beside the route is picked up', ($ev['pickup'][0]['by'] ?? null) === 0);
+// paired drop: one crate per tank, same distance, nearer its own tank
+mt_srand(3); FX::reset(); $t = $flat();
+$pl = [0 => $tank(-50, 0), 1 => ['seat' => 1] + $tank(50, 0), 2 => ['seat' => 2] + $tank(0, 60)]; $objs = [];
+$cs = drop_paired($t, $pl, $objs, ['items' => 'safe', 'crate_near' => 18.0], 5);
+$ok = count($cs) === 3;
+foreach ($cs as $c) { $own = $pl[$c['for']]; $ok = $ok && abs(hypot($c['x'] - $own['x'], $c['z'] - $own['z']) - 18) < .01;
+    foreach ($pl as $s => $p) if ($s !== $c['for']) $ok = $ok && hypot($c['x'] - $p['x'], $c['z'] - $p['z']) >= 28 - .01; }
+ok('paired drop: a crate for each tank, 18 m from it, 10 m+ nearer it than anyone else', $ok, $cs);
+ok('paired drop: no second crate while one is waiting', drop_paired($t, $pl, $objs, ['items' => 'safe', 'crate_near' => 18.0], 10) === []);
+$o2 = []; ok('paired drop: nothing when power-ups are off', drop_paired($t, $pl, $o2, ['items' => 'off'], 5) === []);
 ok('max power: Fortified 85, others 100', max_power($tank(0, 0, $C('fortified'))) === 85.0 && max_power($tank(0, 0)) === 100.0);
 
 echo "\n$pass passed, $fail failed\n";

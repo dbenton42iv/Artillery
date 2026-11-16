@@ -13,7 +13,7 @@ const AT = require('../assets/terrain.js');
 const sims = JSON.parse(fs.readFileSync(process.argv[2] || '/tmp/sims.json', 'utf8'));
 const f32 = b64 => { const b = Buffer.from(b64, 'base64'); return new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)); };
 
-let regens = 0, failed = 0, drives = 0, driveBad = 0, allDrives = 0, allBad = 0;
+let pickups = 0, regens = 0, failed = 0, drives = 0, driveBad = 0, allDrives = 0, allBad = 0;
 for (const m of sims) {
   const H0 = f32(m.initial), n = Math.round(Math.sqrt(H0.length)) - 1;
   if (n !== m.rules.n) throw new Error('size mismatch');
@@ -36,6 +36,7 @@ for (const m of sims) {
       drives++;
       if (r.x !== q.raw.x || r.z !== q.raw.z || r.used !== q.raw.used || r.stop !== q.raw.stop || r.path.length !== q.raw.n) driveBad++;
       [P[e.seat].x, P[e.seat].y, P[e.seat].z] = d.to;
+      for (const c of d.pickup || []) { O[c.id].state = 'claimed'; P[c.by].item = c.item; pickups++; }   // drove over a crate
       continue;
     }
     if (e.type === 'item') {
@@ -71,7 +72,7 @@ for (const m of sims) {
               `${String(crates).padStart(2)} crates  cells differing: ${diff}${diff ? ` (max ${maxd})` : ''}  tanks off: ${pBad}  objects off: ${oBad}  drives: ${drives}${driveBad ? ` (${driveBad} PLANNED DIFFERENTLY)` : ''}`);
   drives = 0; driveBad = 0;
 }
-console.log(`Heal-over-time events replayed: ${regens}`);
+console.log(`Heal-over-time events replayed: ${regens}; crates picked up by driving: ${pickups}`);
 console.log(`Drives: ${allDrives}, browser preview planned differently from the server: ${allBad}`);
 console.log(failed ? `\n${failed} match(es) FAILED` : `\nAll ${sims.length} matches replay identically.`);
 process.exit(failed ? 1 : 0);

@@ -663,12 +663,14 @@ function drive(int $mid, int $uid, array $in): array
         $t = Terrain::unpack($m['terrain'], $m['rules']['water']);
         $ev = drive_tank($t, $players, $m['objects'], $seat, (float)$in['x'], (float)$in['z'], $left);
         if (isset($ev['error'])) { $pdo->commit(); return $ev; }
+        if (!empty($ev['pickup'])) $m['objects_dirty'] = true;           // drove over a crate
         $used = move_budget($m['rules']) - $left + $ev['used'];
         FX::$e['moved'] = ['seat' => $seat, 'turn' => (int)$m['turn_no'], 'used' => round($used, 2)];
         $ev['left'] = round(max(0.0, move_budget($m['rules']) - $used), 2);
         $players[$seat]['strikes'] = 0;                  // driving counts as being at the controls
         $players[$seat]['moved'] = ($players[$seat]['moved'] ?? 0) + $ev['used'];
         $eid = add_event($m, $seat, 'move', $ev);
+        foreach ($ev['pickup'] ?? [] as $c) { log_item($m, $seat, $c['item'], 'claim'); if ($c['lost']) log_item($m, $seat, $c['lost'], 'replaced'); }
         save_players($mid, $players);
         save_match($m, null, $eid);
         $pdo->commit();

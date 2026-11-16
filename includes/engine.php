@@ -515,6 +515,8 @@ function generate_map(string $mapId, int $players): array
         'crate_every' => max(1, (int)cfg('crate_every', CRATE_EVERY)), 'crate_max' => max(1, (int)cfg('crate_max', CRATE_MAX)),
         'crate_radius' => max(0.0, (float)cfg('crate_radius', CRATE_RADIUS)),
         'crate_high' => !empty($R['crate_high']),
+        // phase 4: one crate per tank, near it ('centre' = the old single crate between the tanks; older matches)
+        'crates' => cfg('crate_drops', 'paired') === 'centre' ? 'centre' : 'paired', 'crate_near' => max(8.0, (float)cfg('crate_near', CRATE_NEAR)),
     ];
     return ['terrain' => $t, 'spawns' => $pos, 'objects' => $objects, 'rules' => $rules];
 }
@@ -778,14 +780,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
         if ($o['type'] !== 'crate' || $o['state'] !== 'live') continue;
         $d = sqrt(($p[0] - $o['x']) ** 2 + ($p[1] - ($o['y'] + .8)) ** 2 + ($p[2] - $o['z']) ** 2);
         if ($d <= (float)($w['claim'] ?? CRATE_CLAIM) && $owner !== null) {   // Scavenger: 6 m
-            // what's inside is decided only now, so nobody (not even a player reading the network traffic) knows before
-            $pool = item_pool((string)($o['pool'] ?? 'safe'));
-            if (sk($players[$owner], 'dug_in', false)) unset($pool['relocate']);   // Dug In can't use it, so never finds it
-            $o['item'] ??= roll_item($pool) ?? 'repair';
-            $prev = $players[$owner]['item'] ?? null;
-            $players[$owner]['item'] = $o['item'];
-            $o['state'] = 'claimed'; $o['by'] = $owner;
-            $crates[] = ['id' => $o['id'], 'by' => $owner, 'item' => $o['item'], 'lost' => $prev];
+            $crates[] = open_crate($players, $o, $owner);
         } elseif ($d < $R && !$mound) {
             $o['state'] = 'destroyed';                               // wrecked unopened: its contents never existed
             $crates[] = ['id' => $o['id'], 'by' => null];
@@ -893,8 +888,10 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         unset($me);
     }
     $every = max(1, (int)($rules['crate_every'] ?? CRATE_EVERY));
-    if ($turn % $every === 0 && ($c = drop_crate($t, $players, $objects, $rules, $turn))) {
-        $out['crates'] = [$c]; $did = true;
+    if ($turn % $every === 0) {
+        $cs = ($rules['crates'] ?? 'centre') === 'paired' ? drop_paired($t, $players, $objects, $rules, $turn)
+            : (($c = drop_crate($t, $players, $objects, $rules, $turn)) ? [$c] : []);
+        if ($cs) { $out['crates'] = $cs; $did = true; }
     }
     return $did ? $out : null;
 }
@@ -1001,6 +998,76 @@ function drop_crate(Terrain $t, array $players, array &$objects, array $rules, i
     return $c;
 }
 
+/*
+ * Paired drops (phase 4, David's choice): one crate per tank, each the same distance from its own tank, so nobody has
+ * to give up a shot to get one. Drive over your crate to pick it up (a turn or two of driving), or shoot any crate as
+ * before: within 4 m claims it, a blast further out wrecks it, so an enemy's crate can be stolen or denied.
+ * A tank that still has a crate waiting gets no new one. Every crate in a drop is the same distance from its own tank
+ * (crate_near, 18 m by default; nearer or farther only if some tank has no clear spot at that distance), at least
+ * PAIR_MARGIN metres farther from every other tank, on dry ground the tank can drive to.
+ */
+const PAIR_MARGIN = 10.0;
+
+/**
+ * Clear, dry spots exactly $D metres from $seat's tank, nearer to it than to any other tank; with $reach, only those
+ * the tank can drive to (a tank stuck in a deep crater can't reach any, so the drop then falls back to unreachable spots).
+ */
+function paired_spots(Terrain $t, array $players, array $objects, int $seat, float $D, bool $reach = true): array
+{
+    $me = $players[$seat]; $out = []; $lim = $t->half - DRIVE_EDGE - 2;
+    $blk = drive_blockers($players, $objects, $seat); $a0 = rnd() * M_PI * 2;
+    for ($k = 0; $k < 24; $k++) {
+        $a = $a0 + $k / 24 * M_PI * 2;
+        $x = $me['x'] + sin($a) * $D; $z = $me['z'] - cos($a) * $D;
+        if (abs($x) > $lim || abs($z) > $lim || $t->heightAt($x, $z) < $t->water + DRIVE_SHORE + .2) continue;
+        foreach ($players as $s => $pl) if ($s !== $seat && $pl['alive'] && hypot($pl['x'] - $x, $pl['z'] - $z) < $D + PAIR_MARGIN) continue 2;
+        foreach ($objects as $o) {
+            if ($o['type'] === 'building' && $o['hp'] > 0 && abs($x - $o['x']) < $o['hw'] + 3 && abs($z - $o['z']) < $o['hd'] + 3) continue 2;
+            if ($o['type'] === 'crate' && $o['state'] === 'live' && hypot($o['x'] - $x, $o['z'] - $z) < 6) continue 2;
+        }
+        $out[] = [$x, $z];
+        if (!$reach) continue;
+        array_pop($out);
+        // the tank must be able to drive there: straight at it, within three times the distance of allowance
+        $r = drive_path($t, $blk, (float)$me['x'], (float)$me['z'], $x, $z, $D * 3);
+        if (hypot($r["x"] - $x, $r["z"] - $z) > CRATE_PICK - .3) continue;   // with a margin, so rounding never puts it out of reach
+        $out[] = [$x, $z];
+    }
+    return $out;
+}
+
+/** Drop one crate for each living tank that has none waiting. Returns the new crates (each with 'for' => seat). */
+function drop_paired(Terrain $t, array $players, array &$objects, array $rules, int $turn): array
+{
+    if (!item_pool((string)($rules['items'] ?? 'off'))) return [];
+    $waiting = [];
+    foreach ($objects as $o) if ($o['type'] === 'crate' && $o['state'] === 'live' && isset($o['for'])) $waiting[(int)$o['for']] = true;
+    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']])));
+    if (!$seats) return [];
+    $near = (float)($rules['crate_near'] ?? CRATE_NEAR);
+    // one distance for everyone in this drop; spots each tank can drive to if possible, otherwise (a tank dug into
+    // a crater) any clear dry spot at that distance for that tank, which can still be shot open
+    foreach ([true, false] as $strict) foreach ([0, 3, -3, 6, -6, 10] as $dd) {
+        $D = max(8.0, $near + $dd); $pick = [];
+        foreach ($seats as $s) {
+            $sp = paired_spots($t, $players, $objects, $s, $D); $reach = true;
+            if (!$sp && !$strict) { $sp = paired_spots($t, $players, $objects, $s, $D, false); $reach = false; }
+            if (!$sp) continue 2;
+            $pick[$s] = [...$sp[mt_rand(0, count($sp) - 1)], $reach];
+        }
+        $out = [];
+        foreach ($pick as $s => [$x, $z, $reach]) {
+            $x = round($x, 3); $z = round($z, 3);
+            $c = ['id' => count($objects), 'type' => 'crate', 'x' => $x, 'z' => $z, 'y' => max($t->heightAt($x, $z), $t->water),
+                  'pool' => (string)$rules['items'], 'state' => 'live', 'turn' => $turn, 'for' => $s, 'd' => $D];
+            if (!$reach) $c['far'] = true;                          // its tank can't drive there right now
+            $objects[] = $c; $out[] = $c;
+        }
+        return $out;
+    }
+    return [];
+}
+
 /** Relocate: a random clear, fairly flat spot on land at least 40 m from where the tank is now. Null if none. */
 function relocate_spot(Terrain $t, array $players, array $objects, int $seat): ?array
 {
@@ -1036,16 +1103,57 @@ const DRIVE_TANK_R = 4.5, DRIVE_CRATE_R = 2.6, DRIVE_BUILDING_PAD = 1.8, DRIVE_M
 /** Per-turn driving allowance in metres for a match (matches from before phase 3 use the site setting). */
 function move_budget(array $rules): float { return max(0.0, (float)($rules['move'] ?? cfg('move_per_turn', 10))); }
 
-/** What a tank can't drive through: other tanks (wrecks too) and crates as circles, standing buildings as boxes. */
+/**
+ * What a tank can't drive through: other tanks (wrecks too) as circles, standing buildings as boxes.
+ * Crates don't block: driving over one picks it up (crate_pickups()).
+ */
 function drive_blockers(array $players, array $objects, int $seat): array
 {
     $b = ['c' => [], 'b' => []];
     foreach ($players as $s => $pl) if ($s !== $seat) $b['c'][] = [(float)$pl['x'], (float)$pl['z'], DRIVE_TANK_R];
     foreach ($objects as $o) {
-        if ($o['type'] === 'crate' && $o['state'] === 'live') $b['c'][] = [(float)$o['x'], (float)$o['z'], DRIVE_CRATE_R];
-        elseif ($o['type'] === 'building' && $o['hp'] > 0) $b['b'][] = [(float)$o['x'], (float)$o['z'], $o['hw'] + DRIVE_BUILDING_PAD, $o['hd'] + DRIVE_BUILDING_PAD];
+        if ($o['type'] === 'building' && $o['hp'] > 0) $b['b'][] = [(float)$o['x'], (float)$o['z'], $o['hw'] + DRIVE_BUILDING_PAD, $o['hd'] + DRIVE_BUILDING_PAD];
     }
     return $b;
+}
+
+/** Distance from point (px, pz) to the segment from (ax, az) to (bx, bz). */
+function seg_dist(float $px, float $pz, float $ax, float $az, float $bx, float $bz): float
+{
+    $dx = $bx - $ax; $dz = $bz - $az; $L2 = $dx * $dx + $dz * $dz;
+    $k = $L2 > 0 ? max(0.0, min(1.0, (($px - $ax) * $dx + ($pz - $az) * $dz) / $L2)) : 0.0;
+    return hypot($px - ($ax + $dx * $k), $pz - ($az + $dz * $k));
+}
+
+/**
+ * Crates picked up by driving: every live crate within CRATE_PICK metres (Scavenger: more) of the straight route the tank
+ * just drove. Opens each one for the driver (contents are rolled now, as with a shell claim) and marks it claimed.
+ * Returns [['id', 'by', 'item', 'lost'], ...] in the order they were reached.
+ */
+function crate_pickups(array &$players, array &$objects, int $seat, float $x0, float $z0, float $x1, float $z1): array
+{
+    $r = (float)sk($players[$seat], 'pick', CRATE_PICK); $got = [];
+    $order = [];
+    foreach ($objects as $k => $o) {
+        if ($o['type'] !== 'crate' || $o['state'] !== 'live') continue;
+        if (seg_dist((float)$o['x'], (float)$o['z'], $x0, $z0, $x1, $z1) <= $r) $order[$k] = hypot($o['x'] - $x0, $o['z'] - $z0);
+    }
+    asort($order);
+    foreach (array_keys($order) as $k) $got[] = open_crate($players, $objects[$k], $seat);
+    return $got;
+}
+
+/** $seat opens a crate (by shell or by driving): its contents are rolled now and go into the tank's one slot. */
+function open_crate(array &$players, array &$o, int $seat): array
+{
+    // what's inside is decided only now, so nobody (not even a player reading the network traffic) knows before
+    $pool = item_pool((string)($o['pool'] ?? 'safe'));
+    if (sk($players[$seat], 'dug_in', false)) unset($pool['relocate']);   // Dug In can't use it, so never finds it
+    $o['item'] ??= roll_item($pool) ?? 'repair';
+    $prev = $players[$seat]['item'] ?? null;
+    $players[$seat]['item'] = $o['item'];
+    $o['state'] = 'claimed'; $o['by'] = $seat;
+    return ['id' => $o['id'], 'by' => $seat, 'item' => $o['item'], 'lost' => $prev];
 }
 
 /**
@@ -1090,7 +1198,7 @@ function drive_path(Terrain $t, array $blk, float $x0, float $z0, float $tx, flo
  * Move $seat toward (tx, tz) with $left metres of allowance. Changes $players in place.
  * Returns the replay record for a 'move' event, or ['error' => code].
  */
-function drive_tank(Terrain $t, array &$players, array $objects, int $seat, float $tx, float $tz, float $left): array
+function drive_tank(Terrain $t, array &$players, array &$objects, int $seat, float $tx, float $tz, float $left): array
 {
     $me = &$players[$seat];
     if ($left < DRIVE_MIN) return ['error' => 'no_fuel'];
@@ -1100,7 +1208,10 @@ function drive_tank(Terrain $t, array &$players, array $objects, int $seat, floa
     $ev = ['from' => [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)], 'to' => [$x, $y, $z],
            'path' => array_map('r3', $r['path']), 'used' => round($r['used'], 2), 'stop' => $r['stop']];
     $ev['path'][count($ev['path']) - 1] = [$x, $y, $z];
+    $x0 = (float)$me['x']; $z0 = (float)$me['z'];
     [$me['x'], $me['y'], $me['z']] = [$x, $y, $z];
+    unset($me);
+    if ($got = crate_pickups($players, $objects, $seat, $x0, $z0, $x, $z)) $ev['pickup'] = $got;   // drove over a crate
     return $ev;
 }
 

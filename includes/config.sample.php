@@ -23,9 +23,12 @@ return [
     'wind_max'      => 8,            // 0 turns wind off on every map; any other value lets each map use its own wind range
     // Maps that ranked matches rotate through (ids from includes/maps.php). Leave out to use the default pool of five.
     // 'ranked_maps' => ['highlands', 'archipelago', 'canyon', 'volcano', 'arctic'],
-    'crate_every'   => 5,            // a supply crate parachutes in at the start of every Nth turn
-    'crate_max'     => 1,            // most crates on the field at once
-    'crate_radius'  => 15,           // crates land anywhere inside a circle this wide (metres) around the point between the tanks
+    'crate_every'   => 5,            // supply crates parachute in at the start of every Nth turn
+    'crate_drops'   => 'paired',     // 'paired': one crate per tank, crate_near metres from it (drive over it or shoot it);
+                                     // 'centre': the old single crate in a circle between the tanks
+    'crate_near'    => 18,           // paired: how far each tank's crate lands from it (metres, the same for every tank)
+    'crate_max'     => 1,            // centre: most crates on the field at once
+    'crate_radius'  => 15,           // centre: crates land anywhere inside a circle this wide (metres) around the point between the tanks
     'move_per_turn' => 10,           // metres a tank may drive on its turn before firing (0 turns driving off)
     'regen_per_turn' => 3,           // hp a tank repairs at the start of its own turn, up to 100, until sudden death (0 = off)
     // Usernames that can open admin.php (end stuck matches, clear the queue, "restart" the game).

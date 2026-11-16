@@ -1,6 +1,10 @@
 <?php
 /*
- * Crate placement check: "crates fall at a random spot inside a 15 m circle around the point between the players".
+ * Crate placement check.
+ * Paired drops (phase 4, the default): every crate in a drop lands the same distance from its own tank, at least
+ * PAIR_MARGIN metres farther from every other living tank, on dry ground its tank can drive to.
+ * Centre drops (crate_drops = 'centre', and matches from before phase 4): "crates fall at a random spot inside a 15 m
+ * circle around the point between the players".
  *   php tests/crate_gate.php [/tmp/sims.json] [seeds]
  *
  * The centre is worked out here independently of the engine: halfway between two tanks; for three or more,
@@ -40,6 +44,27 @@ function centre_between(array $tanks): array
     return hypot($cx - $avg[0], $cz - $avg[1]) < 60 ? [$cx, $cz] : $avg;
 }
 $R = CRATE_RADIUS; $fail = 0; $dists = [];
+$pairN = 0; $pairD = []; $pairMargin = []; $pairFar = 0;
+/** Paired: each crate exactly its 'd' from its own tank, and every other living tank at least d + PAIR_MARGIN away. */
+$checkPaired = function (array $bySeat, array $crates, string $where, ?Terrain $t = null, array $players = [], array $objects = [])
+    use (&$fail, &$pairN, &$pairD, &$pairMargin, &$pairFar) {
+    foreach ($crates as $c) {
+        $pairN++; $own = $bySeat[$c['for']]; $d = hypot($c['x'] - $own[0], $c['z'] - $own[1]);
+        $pairD[] = $c['d'];
+        if (abs($d - $c['d']) > .01) { $fail++; echo "FAIL  $where: crate " . round($d, 2) . " m from its tank, meant " . $c['d'] . "\n"; }
+        $other = INF;
+        foreach ($bySeat as $s => $p) if ($s !== $c['for'] && $p[2]) $other = min($other, hypot($c['x'] - $p[0], $c['z'] - $p[1]));
+        $pairMargin[] = $other - $d;
+        if ($other < $c['d'] + PAIR_MARGIN - .01) { $fail++; echo "FAIL  $where: another tank only " . round($other, 1) . " m from someone else's crate\n"; }
+        if (!empty($c['far'])) { $pairFar++; continue; }          // fallback: its tank couldn't reach any spot
+        if ($t) {
+            if ($t->heightAt($c['x'], $c['z']) < $t->water + DRIVE_SHORE) { $fail++; echo "FAIL  $where: crate in the water\n"; }
+            $me = $players[$c['for']];
+            $r = drive_path($t, drive_blockers($players, $objects, $c['for']), $me['x'], $me['z'], $c['x'], $c['z'], $c['d'] * 3);
+            if (hypot($r["x"] - $c["x"], $r["z"] - $c["z"]) > CRATE_PICK + 1e-6) { $fail++; echo "FAIL  $where: its tank can't drive to the crate ({$r["stop"]}, ends " . round(hypot($r["x"] - $c["x"], $r["z"] - $c["z"]), 2) . " m short, start " . round($me["x"], 2) . "," . round($me["z"], 2) . " alive " . (int)$me["alive"] . ")\n"; }
+        }
+    }
+};
 $high = []; $highFair = [];
 $check = function (array $tanks, float $x, float $z, string $where, bool $isHigh = false) use (&$fail, &$dists, &$high, $R) {
     $c = centre_between($tanks); $d = hypot($x - $c[0], $z - $c[1]);
@@ -56,7 +81,16 @@ $check = function (array $tanks, float $x, float $z, string $where, bool $isHigh
 $file = $argv[1] ?? '/tmp/sims.json';
 if (is_file($file)) {
     $sims = json_decode(file_get_contents($file), true); $n = 0;
-    foreach ($sims as $m) foreach ($m['crate_drops'] as $c) { $n++; $check($c['tanks'], $c['x'], $c['z'], "{$m['map']} {$m['players_n']}p {$m['game_mode']} turn {$c['turn']}", !empty($m['rules']['crate_high'])); }
+    foreach ($sims as $m) foreach ($m['crate_drops'] as $c) {
+        $n++; $where = "{$m['map']} {$m['players_n']}p {$m['game_mode']} turn {$c['turn']}";
+        if (isset($c['for'])) { $checkPaired($c['by_seat'], [$c], $where); continue; }
+        $check($c['tanks'], $c['x'], $c['z'], $where, !empty($m['rules']['crate_high']));
+    }
+    // all crates of one drop share a distance
+    foreach ($sims as $m) { $byTurn = [];
+        foreach ($m['crate_drops'] as $c) if (isset($c['for'])) $byTurn[$c['turn']][] = round((float)$c['d'], 6);
+        foreach ($byTurn as $tn => $ds) if (count(array_unique($ds)) > 1) { $fail++; echo "FAIL  {$m['map']} turn $tn: crates at different distances\n"; }
+    }
     printf("Simulated matches: %d crates dropped\n", $n);
     $leaks = 0; $claims = ['ranked' => [], 'casual' => []];
     foreach ($sims as $m) {
@@ -76,7 +110,7 @@ if (is_file($file)) {
 }
 
 // ---- 2. stress run: every map, 2–4 tanks, random survivors, cratered ground ----
-$seeds = (int)($argv[2] ?? 20); $rows = [];
+$seeds = (int)($argv[2] ?? 20); $rows = []; $pairTries = 0; $pairFull = 0;
 foreach (array_keys(MAPS) as $mi => $map) foreach ([2, 3, 4] as $np) {
     $drops = 0; $tries = 0;
     for ($s = 0; $s < $seeds; $s++) {
@@ -103,6 +137,18 @@ foreach (array_keys(MAPS) as $mi => $map) foreach ([2, 3, 4] as $np) {
             }
             $objects[count($objects) - 1]['state'] = 'claimed';         // taken, so the next turn can drop again
         }
+        // paired drops on the same battlefield (fresh objects: buildings only)
+        $pobj = array_values(array_filter($gen['objects'], fn($o) => $o['type'] === 'building'));
+        for ($k = 0; $k < 3; $k++) {
+            $pairTries++;
+            $cs = drop_paired($t, $players, $pobj, $rules, 5 * ($k + 1));
+            $alive = count(array_filter($players, fn($p) => $p['alive']));
+            if (count($cs) === $alive) $pairFull++;
+            $checkPaired(array_map(fn($p) => [$p['x'], $p['z'], $p['alive']], $players), $cs, "$map {$np}p seed $s paired", $t, $players, $pobj);
+            if (count(array_unique(array_map(fn($c) => $c['d'], $cs))) > 1) { $fail++; echo "FAIL  $map {$np}p seed $s: paired crates at different distances\n"; }
+            foreach ($pobj as &$o) if ($o['type'] === 'crate') $o['state'] = 'claimed';
+            unset($o);
+        }
     }
     $rows[] = sprintf('%-12s %dp  %3d of %3d drop turns produced a crate', $map, $np, $drops, $tries);
 }
@@ -113,7 +159,10 @@ printf("\nAll %d crates: distance from the centre as a share of the %g m radius:
 if ($high) { sort($high); sort($highFair);
     printf("Canyon (high ground only): %d crates, all on the plateaus; distance from the centre median %.0f m, farthest %.0f m; nearest tank closer by median %.0f%%, at most %.0f%%\n",
         count($high), $high[(int)(count($high) / 2)], end($high), 100 * (1 - 1 / $highFair[(int)(count($highFair) / 2)]), 100 * (1 - 1 / end($highFair))); }
+if ($pairN) { sort($pairD); sort($pairMargin);
+    printf("Paired drops: %d crates; distance from their own tank median %.0f m (%.0f–%.0f); every other tank at least %.1f m farther (median %.0f m); %d of %d stress drops gave every living tank a crate; %d crates for a tank that couldn't drive anywhere\n",
+        $pairN, $pairD[(int)(count($pairD) / 2)], $pairD[0], end($pairD), $pairMargin[0], $pairMargin[(int)(count($pairMargin) / 2)], $pairFull, $pairTries, $pairFar); }
 $spread = abs($dists[(int)($n / 2)] - .71) < .06;
 if (!$spread) { $fail++; echo "FAIL  crates don't spread evenly over the circle\n"; }
-echo $fail ? "\nCHECK FAILED ($fail)\n" : "\nPASS: every crate fell inside the {$R} m circle between the tanks, spread evenly over it (Canyon: up on the plateaus, within 60 m).\n";
+echo $fail ? "\nCHECK FAILED ($fail)\n" : "\nPASS: paired crates land the same distance from each tank, nearer its own tank than any other, where it can drive; centre crates fall inside the {$R} m circle between the tanks, spread evenly (Canyon: up on the plateaus, within 60 m).\n";
 exit($fail ? 1 : 0);

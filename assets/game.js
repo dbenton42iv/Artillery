@@ -330,8 +330,14 @@ function addCrate(c, dropping) {
   chute.add(lines); g.add(chute); chute.visible = dropping;
   const y = c.y ?? crateRest(c);
   g.position.set(c.x, dropping ? y + 45 : y, c.z); scene.add(g);
+  // paired drops: each crate belongs to a tank (it lands near it): a ring in that tank's colour, and its name
+  const owner = c.for != null ? S.P[c.for] : null;
+  if (owner) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 2.6, 32), new THREE.MeshBasicMaterial({ color: owner.color.hex, side: THREE.DoubleSide, transparent: true, opacity: .8 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = .08; g.add(ring);
+  }
   const label = document.createElement('div'); label.className = 'tl crate-l';
-  label.innerHTML = '<div style="color:#f0b429">Supply crate</div>';
+  label.innerHTML = owner ? `<div style="color:${owner.color.css}">${owner.seat === S.me ? 'Your crate' : esc(owner.name) + "'s crate"}</div>` : '<div style="color:#f0b429">Supply crate</div>';
   $('#labels').appendChild(label);
   CRATES.set(c.id, { ...c, y, group: g, chute, label, drop: dropping ? { t: 0, from: y + 45 } : null, bob: Math.random()*6 });
 }
@@ -511,7 +517,6 @@ function canDrive() { return myTurn() && moveLeft() >= AT.DRIVE.MIN && !(S.fx &&
 function driveBlockers() {
   const D = AT.DRIVE, c = [], b = [];
   for (const Q of S.P) if (Q.seat !== S.me) c.push([Q.x, Q.z, D.TANK_R]);
-  for (const C of CRATES.values()) c.push([C.x, C.z, D.CRATE_R]);
   for (const O of OBJ) if (O && !O.gone && O.hp > 0) b.push([O.x, O.z, O.hw + D.BUILDING_PAD, O.hd + D.BUILDING_PAD]);
   return { c, b };
 }
@@ -587,6 +592,16 @@ function updateDriveVisuals(mine, time) {
   drvRing.material.opacity = .6 + .2 * Math.sin(time * 3);
   if (DRV.res) { drvPath.visible = true; drvEnd.visible = true; drvEnd.rotation.z += .02; }
 }
+/** Would this planned hop pass over a crate? Same test as crate_pickups() on the server: within 2.5 m (Scavenger 3.5) of the route. */
+function pickupOnRoute(me, r) {
+  const R = me.loadout && (me.loadout.perks || []).includes('scavenger') ? 3.5 : 2.5;
+  const dx = r.x - me.x, dz = r.z - me.z, L2 = dx*dx + dz*dz;
+  for (const C of CRATES.values()) {
+    const k = L2 > 0 ? Math.max(0, Math.min(1, ((C.x - me.x)*dx + (C.z - me.z)*dz) / L2)) : 0;
+    if (Math.hypot(C.x - (me.x + dx*k), C.z - (me.z + dz*k)) <= R) return true;
+  }
+  return false;
+}
 function syncDriveUI(me, mine) {
   const b = $('#driveBtn'), fb = $('#fire');
   if (b) {
@@ -602,7 +617,7 @@ function syncDriveUI(me, mine) {
     const r = DRV.res, ok = r && r.used >= AT.DRIVE.MIN;
     fb.disabled = !ok;
     $('#whoTag').textContent = !r ? (DEV.touch ? 'Tap the ground where you want to go' : 'Click the ground to drive there · Esc to aim')
-      : ok ? `${r.used.toFixed(1)} m${r.stop !== 'arrived' ? ` (${STOP_TEXT[r.stop]})` : ''}${DEV.touch ? ' · press DRIVE' : ''}` : `Can't go that way: ${STOP_TEXT[r.stop]}`;
+      : ok ? `${r.used.toFixed(1)} m${r.stop !== 'arrived' ? ` (${STOP_TEXT[r.stop]})` : ''}${pickupOnRoute(me, r) ? ' · picks up the crate' : ''}${DEV.touch ? ' · press DRIVE' : ''}` : `Can't go that way: ${STOP_TEXT[r.stop]}`;
   }
 }
 /** Replay a 'move' event: the tank drives along the recorded path, kicking up dust. */
@@ -621,6 +636,7 @@ function updateMove(pl, dt) {
   const P = pl.P;
   if (pl.t >= pl.dur) {                                        // arrived: a short pause, then the next event
     pl.end += dt;
+    if (!pl.picked) { pl.picked = true; for (const c of pl.d.pickup || []) removeCrate(c.id, 'claimed', c.by, c.item); }   // drove over a crate
     if (pl.end > .45) { [P.x, P.y, P.z] = pl.d.to; if (P.seat === S.me) camBehind({ ...P, yaw: S.aim.yaw }); endEvent(); }
     return;
   }
@@ -776,7 +792,6 @@ function init(d) {
   N = RULES.n; SIZE = N * AT.CELL; HALF = SIZE / 2; MS = HALF / 120; G = RULES.gravity; WATER = RULES.water;
   applyTheme();
   initTerrain(decodeTerrain(d.terrain));
-  buildObjects(d.objects || []);
   buildVent();
   S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
   S.P = d.players.map(p => {
@@ -787,6 +802,7 @@ function init(d) {
     P.hullYaw = P.yaw; P.tank.hull.rotation.y = -P.yaw*D2R;
     return P;
   });
+  buildObjects(d.objects || []);                    // after the tanks: paired crates show their tank's colour
   props.build(TH.props, [...S.P.map(p => [p.x, p.z, 9]), ...OBJ.map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]), ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : [])]);
   const me = S.P[S.me];
   S.aim.yaw = me.yaw;
@@ -1038,7 +1054,12 @@ function startTurnEvent(e) {
   for (const b of d.burn || []) { const Q = S.P[b.seat]; Q.hp = Math.max(0, Q.hp - b.dmg); if (b.abs) shieldHit(b.seat);
     popup(b.dmg ? `-${b.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff9a4a'); }
   for (const id of d.fire_end || []) removeFire(id);
-  for (const c of d.crates || []) { addCrate(c, true); msgs.push('Supply drop!'); camAt(c.x, c.y, c.z, 90*MS); }
+  if ((d.crates || []).length) {
+    for (const c of d.crates) addCrate(c, true);
+    const mine = d.crates.find(c => c.for === S.me), at = mine || d.crates[0];
+    msgs.push(mine ? `Supply drop! Your crate is ${Math.round(mine.d || 0)} m away: drive over it.` : 'Supply drop!');
+    camAt(at.x, at.y, at.z, 90*MS);
+  }
   if (d.snow) {
     for (const op of d.ops) if (op[0] === 'f') AT.apply(VT, op);
     for (let k = 0; k < scorch.length; k++) scorch[k] *= .82;
@@ -1174,7 +1195,7 @@ function syncItemButton(me, mine) {
   b.classList.toggle('on', !!it && S.aim.weapon === me.item);
   b.classList.toggle('has', !!it);
   b.style.setProperty('--ic', it ? it.color : '');
-  b.title = it ? `${it.name}: ${it.tip}` : 'Power-up slot: shoot a supply crate (within 4 m) to claim what is inside';
+  b.title = it ? `${it.name}: ${it.tip}` : 'Power-up slot: drive over your supply crate, or shoot any crate (within 4 m), to claim what is inside';
   const act = !it ? 'empty' : it.kind === 'shell' ? (S.aim.weapon === me.item ? 'loaded' : 'load') : it.kind === 'turn' ? 'use · ends turn' : 'use';
   b.innerHTML = `<span>${it ? `<i>${it.icon}</i>${esc(it.name)}` : 'Power-up'}</span><kbd>${act}${DEV.touch || !it ? '' : ' · 4'}</kbd>`;
 }

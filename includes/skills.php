@@ -27,6 +27,7 @@ const LEVEL_MAX = 50;
  *   max_power   highest power you can fire                 arc         × length of the aim arc (browser only)
  *   forecast    see the wind of your own next turn         fall_taken  × fall damage you take
  *   clock       + seconds on your shot clock               claim       crate claim radius for your shells (m)
+ *   pick        crate pick-up radius when driving (m)
  *   item_turns  + turns your timed power-ups last          spotter     after each shot: how far it landed from the nearest enemy
  *   hit_r       your tank's hit radius (m)                 split / bomblet_dmg  Cluster bomblets: count, + damage each
  *   heavy_dmg   + damage of your Heavy shells (Heavy Gunner: −5)
@@ -57,8 +58,8 @@ const PERKS = [
     'loader'     => ['name' => 'Quick Loader',      'level' => 2,  'icon' => '⏱',
                      'gain' => '+10 s on your shot clock', 'cost' => 'None (clock only)', 'mods' => ['clock' => 10, 'ai_aim' => 0.975]],
     'scavenger'  => ['name' => 'Scavenger',         'level' => 4,  'icon' => '⌂',
-                     'gain' => 'Claim crates from 6 m instead of 4', 'cost' => 'Power-ups you claim last 1 turn less',
-                     'mods' => ['claim' => 6.0, 'item_turns' => -1]],
+                     'gain' => 'Claim crates from 6 m instead of 4 (3.5 m instead of 2.5 when driving over them)', 'cost' => 'Power-ups you claim last 1 turn less',
+                     'mods' => ['claim' => 6.0, 'pick' => 3.5, 'item_turns' => -1]],
     'spotter'    => ['name' => 'Spotter',           'level' => 6,  'icon' => '⌕',
                      'gain' => 'After each shot, see how far it landed from the nearest enemy', 'cost' => 'Enemies see you are spotting',
                      'mods' => ['spotter' => true, 'ai_aim' => 0.97]],

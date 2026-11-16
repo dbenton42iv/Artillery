@@ -100,14 +100,15 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   ranked match. Ruined City and Lunar Base are played in Casual and Private matches, or add them to the pool.
 - **Sudden death:** from turn 30, every tank loses 5 hp per turn and the wind gets 0.5 m/s stronger each turn,
   up to 15 m/s.
-- **Supply crates:** a crate parachutes in at the start of every 5th turn, with at most 1 on the field at a time.
-  It lands at a random spot inside a 15 m circle around the point between the living tanks: halfway between
-  two tanks, or with three or four, the point the same distance from all of them (every match spawns its tanks
-  on one shared circle, so that point exists; once tanks drive, the circle that best fits where they stand). On
-  **Canyon**, where that point is down in the gorge, crates land only on the plateaus: the search widens up to
-  60 m and picks among the high spots closest to the same distance from every tank. Change all three with
-  `crate_every`, `crate_max` and `crate_radius`. Shoot it:
-  a shell exploding within 4 m claims it, and a crate further out but inside a blast is wrecked. Crates are
+- **Supply crates (paired drops):** at the start of every 5th turn (`crate_every`), every tank gets its own crate.
+  Each lands the same distance from its own tank (18 m, `crate_near`), always at least 10 m nearer to it than to
+  any other tank, on dry ground the tank can drive to; a tank that still has a crate waiting gets no new one. Its
+  crate has a ring in its colour and reads *Your crate*. **Drive over it** (within 2.5 m of your route) to open
+  it: that's a turn or two of driving, and it doesn't cost your shot; the drive preview says when a route picks it up.
+  You can also **shoot any crate**: a shell exploding within 4 m claims it for you, so you can steal an enemy's
+  crate, and a crate further out but inside a blast is wrecked, so you can deny one. Driving doesn't stop at crates.
+  Set `'crate_drops' => 'centre'` for the old rule (one crate in a 15 m circle between the tanks, `crate_max` and
+  `crate_radius`; on Canyon, up on the plateaus); matches started before phase 4 keep it. Crates are
   sealed: what's inside is decided by the server only at the moment one is claimed, so nobody can know it in
   advance (not even by reading the game's network traffic). Once claimed, everyone sees what it was. You hold
   one power-up at a time; a new one replaces it. It sits in the 4th
@@ -157,7 +158,7 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   |---|---|---|---|
   | Reinforced Tracks | fall damage on you halved | −5 starting hp | 2 |
   | Quick Loader | +10 s on your shot clock | none (clock only) | 2 |
-  | Scavenger | claim crates from 6 m instead of 4 | your power-ups last 1 turn less (Shield, Napalm, Weather Report) | 4 |
+  | Scavenger | claim crates from 6 m instead of 4 (3.5 m instead of 2.5 when driving over them) | your power-ups last 1 turn less (Shield, Napalm, Weather Report) | 4 |
   | Spotter | after each shot: how far it landed from the nearest enemy ("12 m short · 3 m left") | enemies see SPOTTING by your name | 6 |
   | Low Profile | smaller target: hit radius 2.1 m instead of 2.4 | −4 starting hp | 8 |
   | Bomblet Pack | Cluster splits into 7 bomblets instead of 5 | each bomblet −5 damage | 10 |
@@ -241,7 +242,9 @@ numbers live in `includes/skills.php`.
 | `ranked_maps` | 5 maps | map ids that ranked matches rotate through |
 | `crate_every` | 5 | a supply crate drops at the start of every Nth turn |
 | `crate_max` | 1 | most crates on the field at once |
-| `crate_radius` | 15 | crates land anywhere inside a circle this wide (metres) around the point between the tanks |
+| `crate_radius` | 15 | centre drops: crates land anywhere inside a circle this wide (metres) around the point between the tanks |
+| `crate_drops` | paired | `paired`: one crate per tank, `crate_near` metres from it; `centre`: the old single crate between the tanks |
+| `crate_near` | 18 | paired drops: how far each tank's crate lands from it (metres) |
 | `move_per_turn` | 10 | metres a tank may drive on its turn before firing; 0 turns driving off |
 | `regen_per_turn` | 3 | hp a tank repairs at the start of its own turn (up to 100, until sudden death); 0 turns it off |
 | `admins` | none | usernames that can open `admin.php`, e.g. `['david']` |
@@ -278,7 +281,8 @@ includes/            → config, database, game engine, map recipes, power-ups (
 tests/               → php tests/names_test.php (name filter)
                        php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
                          the browser's drive preview plans exactly the route the server drives)
-                       php tests/crate_gate.php /tmp/s.json   (crates land in the circle between the tanks)
+                       php tests/crate_gate.php /tmp/s.json   (paired crates: same distance from each tank, nearer its own, reachable;
+                         centre crates: in the circle between the tanks)
                        php tests/ai_bench.php [--no-drive]    (computer players: speed, accuracy and driving by skill)
                        php tests/sim_matches.php 1 44 1 --skills > /tmp/k.json && node tests/replay_parity.js /tmp/k.json
                          (the same replay check with every tank on a random loadout)

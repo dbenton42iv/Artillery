@@ -22,6 +22,9 @@ defined('ART3D') || exit;
 /* Defaults: a crate every 5th turn, at most 1 on the field. Change with 'crate_every' / 'crate_max' in config.php;
  * each match keeps the values it started with (stored in its rules). */
 const CRATE_EVERY = 5, CRATE_MAX = 1, CRATE_CLAIM = 4.0, CRATE_HIT = 1.3;
+/* Paired drops (phase 4): each tank's crate lands this far from it (crate_near in config.php); driving within
+ * CRATE_PICK metres of a crate picks it up (Scavenger: 3.5 m). */
+const CRATE_NEAR = 18.0, CRATE_PICK = 2.5;
 /* Where crates fall: anywhere inside a circle of this radius (metres) around the point between the living tanks
  * (crate_centre() in engine.php). Change with 'crate_radius' in config.php. */
 const CRATE_RADIUS = 15.0;

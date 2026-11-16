@@ -74,8 +74,9 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
         if ($fx) {
             foreach ($fx['crates'] ?? [] as $c) {
                 $stats['drops']++;
-                $fair[] = ['x' => $c['x'], 'z' => $c['z'], 'turn' => $turn,
-                           'tanks' => array_values(array_map(fn($p) => [$p['x'], $p['z']], array_filter($players, fn($p) => $p['alive'])))];
+                $fair[] = ['x' => $c['x'], 'z' => $c['z'], 'turn' => $turn, 'for' => $c['for'] ?? null, 'd' => $c['d'] ?? null,
+                           'tanks' => array_values(array_map(fn($p) => [$p['x'], $p['z']], array_filter($players, fn($p) => $p['alive']))),
+                           'by_seat' => array_map(fn($p) => [$p['x'], $p['z'], $p['alive']], $players)];
             }
             $fx['deaths'] = resolve_deaths_sim($players, $turn);
             $fx['wind'] = wind_vec($wa, $ws);

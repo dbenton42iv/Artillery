@@ -101,6 +101,12 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
     $me = $players[$seat];
     $inFire = fn(float $x, float $z) => (bool)array_filter($fx['fires'] ?? [], fn($f) => hypot($x - $f['x'], $z - $f['z']) < $f['r'] + 1.5);
     $burning = $inFire($me['x'], $me['z']);
+    // paired drops: head for this tank's own crate (picked up by driving over it), unless it's sitting in a fire
+    if (!$burning) foreach ($objects as $o) {
+        if ($o['type'] !== 'crate' || $o['state'] !== 'live' || (int)($o['for'] ?? -1) !== $seat) continue;
+        if ($inFire($o['x'], $o['z'])) continue;
+        return [(float)$o['x'], (float)$o['z']];
+    }
     if (!$burning && !($wasHit && rnd() < $L['dodge'])) return null;
     $foes = array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat);
     $near = fn(float $x, float $z) => min(array_map(fn($p) => hypot($p['x'] - $x, $p['z'] - $z), $foes) ?: [0.0]);
@@ -142,7 +148,8 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
     usort($foes, fn($a, $b) => (hypot($a['x'] - $me['x'], $a['z'] - $me['z']) + $a['hp'] * .6) <=> (hypot($b['x'] - $me['x'], $b['z'] - $me['z']) + $b['hp'] * .6));
     $foe = $foes[0];
     $T = [$foe['x'], $foe['y'] + 1, $foe['z']]; $target = 'tank'; $wk = 'shell';
-    $crates = array_values(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live'));
+    // its own paired crate it drives to; others' crates it may shoot to steal or deny them
+    $crates = array_values(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live' && (int)($o['for'] ?? -1) !== $seat));
     $foeD = hypot($foe['x'] - $me['x'], $foe['z'] - $me['z']);
     if ($crates && !$item && rnd() < $L['crate']) {
         usort($crates, fn($a, $b) => hypot($a['x'] - $me['x'], $a['z'] - $me['z']) <=> hypot($b['x'] - $me['x'], $b['z'] - $me['z']));
