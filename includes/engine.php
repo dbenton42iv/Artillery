@@ -334,7 +334,7 @@ function gen_archipelago(Noise $nz, int $n, float $half, int $players): array
 }
 
 /*
- * Canyon (remade 16 Nov): a high plateau cut by winding canyons. Every tank starts down on the floor of its own
+ * Canyon (remade 16 Nov, then made shallower and wider the same day): a plateau cut by wide winding canyons. Every tank starts down on the floor of its own
  * canyon, at its own depth, and has to lob up over the rims; a canyon floor is a road it can drive along. One or two
  * more canyons cross the plateau between them. Wind is strong and blows from any direction over the rims.
  */
@@ -342,8 +342,8 @@ function gen_canyon(Noise $nz, int $n, float $half, int $players): array
 {
     $s = $half / 120; $ox = rnd() * 100; $oz = rnd() * 100;
     $spawns = ring_spawns($players, 68 * $s, 76 * $s);
-    $floors = tier_levels($players, 3.0, 12.0);
-    $W = 12.0 * $s;                                          // canyon half-width at the rim
+    $floors = tier_levels($players, 4.5, 11.0);   // floors well above the river level, even near the coast
+    $W = 19.0 * $s;                                          // canyon half-width (floor about 19 m wide, about 55 m rim to rim)
     $cs = [];                                                // [x0, z0, dirx, dirz, floor, wiggle table, half-width]
     $mk = function (float $x0, float $z0, float $a, float $floor, int $seed, float $w) use ($nz, $half, $s) {
         $dx = sin($a); $dz = -cos($a); $L = (int)ceil($half * 1.6); $wig = [];
@@ -368,18 +368,18 @@ function gen_canyon(Noise $nz, int $n, float $half, int $players): array
             $a = atan2($sp[0], -$sp[1]) + M_PI / 2 + (rnd() - .5) * .9;
             $c = $mk($sp[0], $sp[1], $a, $floors[$k], $seedN++, $W); $d = $clear($c, $k);
             if (!$best || $d > $best[1]) $best = [$c, $d];
-            if ($d > 32 * $s) break;
+            if ($d > 42 * $s) break;
         }
         $cs[] = $best[0];
     }
-    for ($j = 0, $m = $players >= 3 ? 1 : 2, $tries = 0; $j < $m && $tries < 40; $tries++) {   // deep canyons between the tanks,
+    for ($j = 0, $m = 1, $tries = 0; $j < $m && $tries < 40; $tries++) {   // a canyon between the tanks,
         $a = rnd() * M_PI; $o = (rnd() - .5) * 40 * $s;                                   // well away from all of them
         $c = $mk(cos($a) * $o, sin($a) * $o, $a, 2.0 + rnd() * 3, 20 + $tries, $W * (.8 + rnd() * .3));
-        if ($clear($c, -1) < 30 * $s) continue;
+        if ($clear($c, -1) < 42 * $s) continue;
         $cs[] = $c; $j++;
     }
     $f = function (float $x, float $z) use ($nz, $cs, $ox, $oz, $half, $s) {
-        $plat = 25 + $nz->fbm($x * .012 + $ox, $z * .012 + $oz) * 10;           // plateau, 25–35 m
+        $plat = 15 + $nz->fbm($x * .012 + $ox, $z * .012 + $oz) * 6;            // plateau, 15–21 m (canyons about 8–18 m deep)
         $h = $plat;
         foreach ($cs as [$x0, $z0, $dx, $dz, $floor, $wig, $L, $w]) {
             $px = $x - $x0; $pz = $z - $z0;
@@ -390,7 +390,7 @@ function gen_canyon(Noise $nz, int $n, float $half, int $players): array
             if ($d > $w * 1.5) continue;
             $fl = $floor + max(0.0, abs($t) - 20) * .03;                          // floors rise gently away from the tank
             // steep walls with a ledge part way up
-            $c = $fl + ($plat - $fl) * (.4 * smoothstep($w * .42, $w * .7, $d) + .6 * smoothstep($w * .9, $w * 1.45, $d));
+            $c = $fl + ($plat - $fl) * (.4 * smoothstep($w * .5, $w * .75, $d) + .6 * smoothstep($w * .95, $w * 1.4, $d));
             $h = min($h, $c);
         }
         $e = edge_falloff($nz, $x, $z, $half);

@@ -82,7 +82,7 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   |---|---|---|---|---|
   | Highlands | Island of hills, a main ridge, a second ridge and knolls; tanks on shelves 4–22 m up | none | 20 | 0–8 m/s |
   | Archipelago | A ring-shaped island (a torus) round a lagoon with rocky islets; the ring has hills and saddles, tanks on it 4.5–17 m up | Shells landing in water splash: blast ×0.6, no crater | 20 | 0–10 m/s |
-  | Canyon | A 25–35 m plateau cut by winding canyons; every tank starts on the floor of its own canyon, 3–12 m up, plus deep canyons between them | Lob high over the rims | 20 | 4–12 m/s |
+  | Canyon | A 15–21 m plateau cut by wide winding canyons (floor about 19 m across, walls about 8–18 m high with a ledge); every tank starts on the floor of its own canyon, 4.5–11 m up, plus one canyon between them | Lob over the rims; drive along the floor | 20 | 4–12 m/s |
   | Volcano | Ring of hills round the cone, old lava domes; tanks 4.5–18 m up | Every 4th turn: 3 lava bombs and the cone grows | 20 | 0–6 m/s |
   | Arctic Shelf | Stepped ice shelves with ice cliffs; each tank on its own shelf, 3.5–15 m | Snow refills craters every turn; falls do ×1.5 damage | 20 | 4–12 m/s |
   | Ruined City | A city on hills; tanks 3.5–15 m up | Buildings (120 hp) stop shells until shot down to rubble | 20 | 0–6 m/s |
