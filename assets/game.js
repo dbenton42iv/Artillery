@@ -344,10 +344,10 @@ function addCrate(c, dropping) {
 function removeCrate(id, how, by, item) {
   const C = CRATES.get(id); if (!C) return;
   const pos = C.group.position.clone().setY(C.group.position.y + 1);
-  if (how === 'claimed') {                                   // opened: now everyone sees what was inside
-    const P = S.P[by], it = ITEMS[item];
-    popup(`+${it ? it.name : item}`, pos.clone().setY(pos.y + 3), P ? P.color.css : '#fff'); noise(.25, 3000, .25, 1.2);
-    if (P) { P.item = item; banner(by === S.me ? `You got ${it ? it.name : item}!` : `${P.name} got ${it ? it.name : item}`, 1600); }
+  if (how === 'claimed') {                                   // opened: only the opener learns what was inside
+    const P = S.P[by], mine = by === S.me, it = mine ? ITEMS[item] : null;
+    popup(mine ? `+${it ? it.name : item}` : '+ power-up', pos.clone().setY(pos.y + 3), P ? P.color.css : '#fff'); noise(.25, 3000, .25, 1.2);
+    if (P) { P.item = mine ? item : 'sealed'; banner(mine ? `You got ${it ? it.name : item}!` : `${P.name} opened a crate`, 1600); }
   } else { spawnDebris(pos, 3, 0x6b4f2c, 6); popup('Crate lost', pos.clone().setY(pos.y + 3), '#d8d2c4'); }
   scene.remove(C.group); C.label.remove(); CRATES.delete(id);
 }
@@ -1220,7 +1220,7 @@ function syncUI() {
   $('#boardStatus').innerHTML = boardStatus();
   $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
-    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
+    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4" title="Holding a power-up (only they know which)">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
     <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
     <div class="hp"><i style="width:${hpPct(q)}%;background:${hpPct(q) > 50 ? '#7bd389' : hpPct(q) > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
   if (!me) return;

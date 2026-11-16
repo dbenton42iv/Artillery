@@ -110,7 +110,9 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   Set `'crate_drops' => 'centre'` for the old rule (one crate in a 15 m circle between the tanks, `crate_max` and
   `crate_radius`; on Canyon, up on the plateaus); matches started before phase 4 keep it. Crates are
   sealed: what's inside is decided by the server only at the moment one is claimed, so nobody can know it in
-  advance (not even by reading the game's network traffic). Once claimed, everyone sees what it was. You hold
+  advance (not even by reading the game's network traffic). Once claimed, only the player who opened it learns what
+  it was: everyone else sees that they opened a crate and hold a power-up (a ? by their name), not which one, until
+  they use or fire it. You hold
   one power-up at a time; a new one replaces it. It sits in the 4th
   weapon-bar slot (key 4):
 

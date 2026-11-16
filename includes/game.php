@@ -710,6 +710,23 @@ function add_forecast(array $m, array $players, int $seat, array $turns): array
     return FX::$e['forecast'][$seat] = array_values($f);
 }
 
+/**
+ * What a crate held is private to whoever opened it (David's rule): in shot and drive events sent to anyone else,
+ * the claimed crates lose 'item' (what was inside) and 'lost' (the power-up it replaced). Everyone still sees who
+ * opened which crate. A power-up shows itself only when it's used or fired.
+ */
+function hide_crate_contents(?array $d, ?int $viewer): ?array
+{
+    if (!$d) return $d;
+    $hide = function (array &$list) use ($viewer) {
+        foreach ($list as &$c) if (($c['by'] ?? null) !== $viewer) { unset($c['item'], $c['lost']); $c['sealed'] = true; }
+    };
+    foreach ($d['projectiles'] ?? [] as $k => $pr) if (!empty($pr['boom']['crates'])) $hide($d['projectiles'][$k]['boom']['crates']);
+    foreach ($d['bombs'] ?? [] as $k => $b) if (!empty($b['crates'])) $hide($d['bombs'][$k]['crates']);
+    if (!empty($d['pickup'])) $hide($d['pickup']);
+    return $d;
+}
+
 /** Snapshot of a match for one player's browser (only that player sees their own wind forecast). */
 function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = null): ?array
 {
@@ -727,7 +744,9 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $players = array_map(function ($p) use ($now, $bots, $mySeat) {
         $r = ['seat' => (int)$p['seat'], 'user_id' => (int)$p['user_id'], 'name' => display_name($p), 'hp' => (int)$p['hp'],
               'alive' => (bool)$p['alive'], 'x' => (float)$p['x'], 'y' => (float)$p['y'], 'z' => (float)$p['z'],
-              'ammo' => ['shell' => null, 'heavy' => (int)$p['ammo_heavy'], 'cluster' => (int)$p['ammo_cluster']], 'item' => $p['item'],
+              'ammo' => ['shell' => null, 'heavy' => (int)$p['ammo_heavy'], 'cluster' => (int)$p['ammo_cluster']],
+              // a held power-up is private: others only see that the tank holds one ('sealed'), never which
+              'item' => $p['item'] === null ? null : ((int)$p['seat'] === $mySeat ? $p['item'] : 'sealed'),
               'strikes' => (int)$p['strikes'], 'placement' => $p['placement'] === null ? null : (int)$p['placement'],
               'damage' => (int)$p['damage_dealt'], 'kills' => (int)$p['kills'], 'rating' => (int)$p['rating_before'],
               'rating_after' => $p['rating_after'] === null ? null : (int)$p['rating_after'],
@@ -747,7 +766,7 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     $ev = db()->prepare('SELECT id, turn_no, seat, type, payload FROM ' . T('match_events') . ' WHERE match_id=? AND id>? ORDER BY id LIMIT 40');
     $ev->execute([$mid, $since]);
     $events = array_map(fn($e) => ['id' => (int)$e['id'], 'turn' => (int)$e['turn_no'], 'seat' => (int)$e['seat'], 'type' => $e['type'],
-                                   'data' => json_decode($e['payload'], true)], $ev->fetchAll());
+                                   'data' => hide_crate_contents(json_decode($e['payload'], true), $mySeat)], $ev->fetchAll());
     $out = [
         'match' => ['id' => (int)$m['id'], 'status' => $m['status'], 'turn' => (int)$m['turn_no'], 'seat' => (int)$m['current_seat'],
                     'time_left' => max(0, (int)$m['turn_deadline'] - $now), 'turn_seconds' => turn_secs(match_rules($m)),
@@ -765,8 +784,9 @@ function match_snapshot(int $mid, int $since, bool $withTerrain, ?int $mySeat = 
     if ($withTerrain) {
         $out['skills'] = skills_catalog();
         $out['terrain'] = base64_encode($m['terrain']);
-        $out['objects'] = array_map(function ($o) {          // sealed crates: never send what's inside
+        $out['objects'] = array_map(function ($o) use ($mySeat) {   // sealed crates: never send what's inside
             if ($o['type'] === 'crate' && $o['state'] === 'live') unset($o['item'], $o['pool']);
+            if ($o['type'] === 'crate' && ($o['by'] ?? null) !== $mySeat) unset($o['item'], $o['pool']);   // opened by someone else: still private
             return $o;
         }, json_decode((string)($m['objects'] ?? ''), true) ?: []);
     }
