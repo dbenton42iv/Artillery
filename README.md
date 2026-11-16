@@ -62,6 +62,10 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   Heavy (×3) or Cluster (×2), and fire. When your turn comes round, the path of your own last shot is shown
   (not the opponent's that just landed), so you can adjust from it. Wind shifts every turn, craters reshape the ground, and tanks
   that lose the ground under them fall and take damage. Last tank standing wins.
+- **Shot cards:** under the aiming controls, cards show your own last 3 shots: the turn, weapon, turret, angle and power,
+  the wind then (as an arrow relative to that aim: ↑ with the shot, ← pushing it left) and what happened (a hit, a crate,
+  the Spotter's range report, or a miss). Tap one on your turn to put your aim back exactly there, e.g. after a turn spent
+  shooting at a crate. They are kept in the browser for that match, so they survive a reload.
 - **Driving:** on your turn, before you fire, you can drive up to 10 m (`move_per_turn`), in one hop or several.
   Press **Drive** (or **G**): a ring shows how far you can go. With a mouse, hover to see the route and click to
   go; on a phone or tablet, tap the ground to see the route, then press **DRIVE**. The tank goes in a straight
@@ -74,19 +78,23 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   at sudden death (turn 30).
 - **Maps:** every match is played on one of these (each has its own look, physics and rule):
 
-  | Map | Rule | Gravity | Wind |
-  |---|---|---|---|
-  | Highlands | Island with a central ridge | 20 | 0–8 m/s |
-  | Archipelago | Shells landing in the sea splash: blast ×0.6, no crater | 20 | 0–10 m/s |
-  | Canyon | Wind always blows along the canyon | 20 | 6–14 m/s |
-  | Volcano | Every 4th turn: 3 lava bombs and the cone grows | 20 | 0–6 m/s |
-  | Arctic Shelf | Snow refills craters every turn; falls do ×1.5 damage | 20 | 4–12 m/s |
-  | Ruined City | Buildings (120 hp) stop shells until shot down to rubble | 20 | 0–6 m/s |
-  | Lunar Base | Low gravity, no wind | 7 | none |
+  | Map | Ground | Rule | Gravity | Wind |
+  |---|---|---|---|---|
+  | Highlands | Island of hills, a main ridge, a second ridge and knolls; tanks on shelves 4–22 m up | none | 20 | 0–8 m/s |
+  | Archipelago | A ring-shaped island (a torus) round a lagoon with rocky islets; the ring has hills and saddles, tanks on it 4.5–17 m up | Shells landing in water splash: blast ×0.6, no crater | 20 | 0–10 m/s |
+  | Canyon | A 15–21 m plateau cut by wide winding canyons (floor about 19 m across, walls about 8–18 m high with a ledge); every tank starts on the floor of its own canyon, 4.5–11 m up, plus one canyon between them | Lob over the rims; drive along the floor | 20 | 4–12 m/s |
+  | Volcano | Ring of hills round the cone, old lava domes; tanks 4.5–18 m up | Every 4th turn: 3 lava bombs and the cone grows | 20 | 0–6 m/s |
+  | Arctic Shelf | Stepped ice shelves with ice cliffs; each tank on its own shelf, 3.5–15 m | Snow refills craters every turn; falls do ×1.5 damage | 20 | 4–12 m/s |
+  | Ruined City | A city on hills; tanks 3.5–15 m up | Buildings (120 hp) stop shells until shot down to rubble | 20 | 0–6 m/s |
+  | Lunar Base | Cratered plain with flat-topped mesas; tanks from a basin (2.5 m) to a mesa (15 m) | Low gravity, no wind | 7 | none |
 
   1 v 1 and 3-tank matches use a 240 m map; 4-tank matches use 360 m.
+- **Different heights:** tanks never start level. On every map the tanks' heights are spread evenly between that
+  map's low and high level and dealt out at random, so no seat is favoured. In computer-vs-computer tests the
+  higher tank won about half of 1 v 1 matches (45–55% on every map, about 1,500 matches), so high ground is an
+  option, not a win.
 - **Cover on every map:** no map is flat with a straight line of sight between tanks. The open maps get their own
-  features (sea stacks on Archipelago, rock pillars on Canyon, pressure ridges on Arctic Shelf, rubble berms in
+  features (sea stacks in Archipelago's lagoon, rock pillars on Canyon, pressure ridges on Arctic Shelf, rubble berms in
   Ruined City, mesas on Lunar Base). After any map is built, every pair of tanks is checked turret to turret, and
   any pair that could see each other gets a ridge of cover, in the map's style, raised between them until the
   ground stands at least 2 m above the line of sight. Buildings don't count, because they can be shot down.
@@ -96,16 +104,19 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   ranked match. Ruined City and Lunar Base are played in Casual and Private matches, or add them to the pool.
 - **Sudden death:** from turn 30, every tank loses 5 hp per turn and the wind gets 0.5 m/s stronger each turn,
   up to 15 m/s.
-- **Supply crates:** a crate parachutes in at the start of every 5th turn, with at most 1 on the field at a time.
-  It lands at a random spot inside a 15 m circle around the point between the living tanks: halfway between
-  two tanks, or with three or four, the point the same distance from all of them (every match spawns its tanks
-  on one shared circle, so that point exists; once tanks drive, the circle that best fits where they stand). On
-  **Canyon**, where that point is down in the gorge, crates land only on the plateaus: the search widens up to
-  60 m and picks among the high spots closest to the same distance from every tank. Change all three with
-  `crate_every`, `crate_max` and `crate_radius`. Shoot it:
-  a shell exploding within 4 m claims it, and a crate further out but inside a blast is wrecked. Crates are
+- **Supply crates (paired drops):** at the start of every 5th turn (`crate_every`), every tank gets its own crate.
+  Each lands the same distance from its own tank (18 m, `crate_near`), always at least 10 m nearer to it than to
+  any other tank, on dry ground the tank can drive to; a tank that still has a crate waiting gets no new one. Its
+  crate has a ring in its colour and reads *Your crate*. **Drive over it** (within 2.5 m of your route) to open
+  it: that's a turn or two of driving, and it doesn't cost your shot; the drive preview says when a route picks it up.
+  You can also **shoot any crate**: a shell exploding within 4 m claims it for you, so you can steal an enemy's
+  crate, and a crate further out but inside a blast is wrecked, so you can deny one. Driving doesn't stop at crates.
+  Set `'crate_drops' => 'centre'` for the old rule (one crate in a 15 m circle between the tanks, `crate_max` and
+  `crate_radius`; on Canyon, up on the plateaus); matches started before phase 4 keep it. Crates are
   sealed: what's inside is decided by the server only at the moment one is claimed, so nobody can know it in
-  advance (not even by reading the game's network traffic). Once claimed, everyone sees what it was. You hold
+  advance (not even by reading the game's network traffic). Once claimed, only the player who opened it learns what
+  it was: everyone else sees that they opened a crate and hold a power-up (a ? by their name), not which one, until
+  they use or fire it. You hold
   one power-up at a time; a new one replaces it. It sits in the 4th
   weapon-bar slot (key 4):
 
@@ -120,9 +131,21 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   | Double Shot | fire two shells this turn, each with its own aim | no |
   | Rangefinder | your aim arc shows the whole flight, wind included, for 1 shot | no |
   | Relocate | moves your tank to a random spot at least 40 m away; uses your turn | no |
+  | Invisibility | enemies lose sight of your tank for 2 rounds (see below) | no |
   | Flare | night maps only: arrives with Scenarios (never drops yet) | no |
 
   Using a power-up doesn't cost your turn, except Relocate. Shell power-ups are loaded from the slot and fired.
+- **Invisibility:** your tank vanishes from other players' screens until the start of your own turn 2 rounds later
+  (the turn you use it, the enemies' turns, your next turn and the enemies' turns after it). You see it as a ghost.
+  - **Firing reveals you**, from wherever you really are. While hidden, a **Hold fire** button (key H) ends your turn
+    without firing, so you stay hidden; it isn't a missed turn.
+  - You can **drive unseen**: others only learn that you moved, never where. Enemies see a ◌ by your name and your
+    tank where it vanished.
+  - It's still there: a shell that lands on it hits it as usual. Picking up a crate shows that crate going.
+  - While hidden you get no crate in a supply drop (where it landed would give you away), Spotter doesn't report
+    against you, and computer players aim at where you vanished. Computer players use it when hurt: they vanish,
+    drive away unseen and hold fire, then fire on their next turn.
+  - The server never sends a hidden tank's position or route to anyone else while the battle runs.
 - **Ranked crates** only hold the six ranked-safe power-ups.
 - **Names:** players log in with their username but can choose a different name for others to see
   (*Change name* in the lobby). Names are 3–20 characters and can change once a day, never during a battle.
@@ -136,6 +159,54 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   *Aim* pad lets you hold and drag to aim (sideways turns the turret, up/down sets the angle).
 - **Ratings:** ranked only (Casual, Private and vs AI never change rating, wins or matches played). Multiplayer Elo. Every pair of players counts as a head-to-head result based on
   finishing order (survivor first, then by how long each tank lasted).
+- **Loadouts:** before a match, every player brings a loadout: **1 doctrine** and up to **2 perks**, set under
+  *Loadout* in the lobby. Every skill has a cost, so a loadout changes how you play without making the tank stronger
+  overall. Everyone sees everyone's loadout on the battle's intro screen and as icons on the scoreboard.
+
+  | Doctrine | Gain | Cost | Level |
+  |---|---|---|---|
+  | Standard Issue | Heavy ×3, Cluster ×2 | none | 1 |
+  | Heavy Gunner | Heavy ×4 | no Cluster rounds; your Heavy shells do 65 damage, not 70 | 3 |
+  | Demolitions | craters 30% wider; fall damage you cause counts double | blast damage −10% | 5 |
+  | Sharpshooter | aim arc twice as long | Heavy ×2, Cluster ×1 | 7 |
+  | Fortified | start at 105 hp | max power 85 (shorter range) | 9 |
+  | Meteorologist | see the wind of your own next turn | every shell −2 damage | 12 |
+
+  | Perk | Gain | Cost | Level |
+  |---|---|---|---|
+  | Reinforced Tracks | fall damage on you halved | −5 starting hp | 2 |
+  | Quick Loader | +10 s on your shot clock | none (clock only) | 2 |
+  | Scavenger | claim crates from 6 m instead of 4 (3.5 m instead of 2.5 when driving over them) | your power-ups last 1 turn less (Shield, Napalm, Weather Report) | 4 |
+  | Spotter | after each shot: how far it landed from the nearest enemy ("12 m short · 3 m left") | enemies see SPOTTING by your name | 6 |
+  | Low Profile | smaller target: hit radius 2.1 m instead of 2.4 | −4 starting hp | 8 |
+  | Bomblet Pack | Cluster splits into 7 bomblets instead of 5 | each bomblet −5 damage | 10 |
+  | Dug In | blasts within 3 m of you do 10% less | can't use Relocate (and never finds it in a crate) | 14 |
+
+  **Presets**, open to everyone in every mode: *Rifleman* (Standard Issue, Quick Loader, Reinforced Tracks), *Gunner*
+  (Heavy Gunner, Quick Loader, Scavenger), *Sapper* (Demolitions, Reinforced Tracks, Scavenger). A custom build may only
+  use skills you've unlocked. **Below level 14, ranked matches always use a preset** (you choose which), so new
+  players never face builds they can't have yet; from level 14 every skill is unlocked and ranked takes custom builds.
+  The server checks the loadout when the match starts and records it with the match.
+- **XP and levels:** every finished match earns XP in every mode (rating stays ranked-only): 50 for finishing,
+  2 per 10 damage dealt, 25 per kill, 50 for a win and 100 for your first win of the day. Leaving or being removed
+  for missed turns loses the finishing and win XP. Level *n* needs 50 + 25×*n* XP to reach the next (levels run to 50;
+  level 14, every skill, takes about 22 matches). The lobby shows your level and progress; the end of each battle shows
+  what it earned and any skills a new level unlocked. Computer players earn nothing; a match the admin ends earns nothing.
+- **Garage (cosmetics):** `garage.php`, linked from the lobby profile, changes how your tank looks to everyone in battle.
+  Looks only: nothing here changes a shot, a hit or a replay. A drawing of the tank shows each choice before you save.
+  - **Paint and camo** go on the hull; the turret always keeps your team colour, so tanks stay easy to tell apart.
+    11 solid paints (levels 1–30) and 7 camos, one per map. A camo unlocks at its level *or* after 3 wins on its map
+    against other players (vs AI wins don't count), e.g. Woodland: level 8 or 3 Highlands wins.
+  - **Barrel:** Standard, Stubby (L3), Long gun (L7), Twin (L15).
+  - **Shell trail:** team colour or a colour (levels 1–13), Smoke rings (L10), Sparks (L18), Rainbow (L28).
+  - **Blast:** Standard, Spark shower (L11), Smoke ring (L19), Confetti (L35), added to the normal explosion.
+  - **Title** shown over your tank and on the leaderboard: Gunner (L5), Bombardier (L10), Artillerist (L15),
+    Siege Engineer (L20), Thunderer (L25), Master Gunner (L30), Iron Rain (L40), Legend (L50); and one per map for
+    10 wins there against other players (Highlander, Island Hopper, Canyon Runner, Volcano Tamer, Ice Breaker,
+    Street Fighter, Moonwalker).
+  Your choice is fixed for each match when it starts (changing it mid-battle takes effect next match). Computer players
+  and matches from before the upgrade use the default look. Unlocks are worked out from your level and wins each time,
+  so nothing to grant or reset.
 - **Missed turns:** if your clock runs out, your turn is skipped. Three missed turns in a row and you
   are removed from the match. The *Leave* button forfeits the match.
 - **Practice:** `practice.html` is the offline version (hot-seat and CPU opponents, no rating).
@@ -164,7 +235,9 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   (in `includes/items.php`) can be tuned against real win rates.
 - **Upgrading** from an earlier version: upload the new files. The first request adds the new columns and tables
   (`matches.game_mode`, `effects`; `match_players.item`; `queue.kind`, `map_pref`; `users.is_bot`; `rooms`,
-  `room_members`, `item_log`; phase 3: `match_players.moved` and the `move` event type) by itself. Matches already
+  `room_members`, `item_log`; phase 3: `match_players.moved` and the `move` event type; phase 4: `users.xp`, `level`,
+  `loadout`, `first_win_on` and `match_players.loadout`, `xp`, `xp_detail`) by itself. Matches from before phase 4
+  finish without loadouts (100 hp, standard kit), and pay XP when they finish. Matches already
   in progress finish under the rules they started with (no crates); they do get driving, at the site's setting.
   If your host caches PHP (OPcache), the new files may take a few seconds to be picked up.
 
@@ -178,6 +251,19 @@ with no move, or a minute with nobody online), the queue, open rooms and the lat
 - **Clear the queue**, **Close open rooms**.
 - **Reload code**: clears PHP's OPcache, so newly uploaded files are used straight away.
 - **Restart everything**: all of the above at once.
+
+**Banning and pausing players** (*Players: ban or pause* on the same page): find a player by username or name, then
+**pause** them for 1 hour, 1 day, 1 week or 30 days, or **ban** them until you restore access, with an optional reason.
+They are signed out on their next request (an open battle or lobby sends them to the login page), can't log in, and
+are told why: "This account is paused by the site admin for another 2 h 59 min. Reason: …". Their tanks in running
+battles are withdrawn as if they had left (opponents play on and are scored normally), and they leave the queue and
+any private room. Rating, history and loadout are kept. Everyone currently banned or paused is listed with time left
+and a **Restore access** button. Admins and computer players can't be banned. Stored in `users.banned_until`
+(a ban is the year 9999), `ban_reason` and `banned_by`; each action is written to the PHP error log.
+
+The page also lists **Loadouts in ranked**: how often each loadout wins finished ranked matches, so a build that wins
+too often (more than 55% in 1 v 1, or 1.1× its fair share with more tanks, over 30+ matches) stands out. The skill
+numbers live in `includes/skills.php`.
 
 ## When something goes wrong
 - **The battle page never freezes.** If the connection drops, a *Connection lost. Reconnecting…* bar appears
@@ -198,7 +284,9 @@ with no move, or a minute with nobody online), the queue, open rooms and the lat
 | `ranked_maps` | 5 maps | map ids that ranked matches rotate through |
 | `crate_every` | 5 | a supply crate drops at the start of every Nth turn |
 | `crate_max` | 1 | most crates on the field at once |
-| `crate_radius` | 15 | crates land anywhere inside a circle this wide (metres) around the point between the tanks |
+| `crate_radius` | 15 | centre drops: crates land anywhere inside a circle this wide (metres) around the point between the tanks |
+| `crate_drops` | paired | `paired`: one crate per tank, `crate_near` metres from it; `centre`: the old single crate between the tanks |
+| `crate_near` | 18 | paired drops: how far each tank's crate lands from it (metres) |
 | `move_per_turn` | 10 | metres a tank may drive on its turn before firing; 0 turns driving off |
 | `regen_per_turn` | 3 | hp a tank repairs at the start of its own turn (up to 100, until sudden death); 0 turns it off |
 | `admins` | none | usernames that can open `admin.php`, e.g. `['david']` |
@@ -225,15 +313,29 @@ api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
 api/move.php         → drive before you fire (server plans the route; doesn't end the turn)
-admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart")
+admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart"); ban or pause players;
+                       how often each loadout wins ranked matches
 api/forfeit.php      → leave a match
+api/hold.php         → Hold fire: end your turn without firing, while invisible
+api/loadout.php      → your level, XP and loadout; save a loadout (presets, or a custom build of unlocked skills)
+garage.php           → the garage: paint, camo, barrel, trail, blast and title (looks only)
+api/cosmetics.php    → what you've unlocked and chosen; save a choice
 includes/            → config, database, game engine, map recipes, power-ups (items.php), private rooms
-                       (rooms.php), computer players (ai.php), matchmaking (web access blocked)
+                       (rooms.php), computer players (ai.php), skills, loadouts, XP and levels (skills.php), cosmetics (cosmetics.php),
+                       matchmaking (web access blocked)
 tests/               → php tests/names_test.php (name filter)
+                       php tests/cosmetics_test.php (garage items and unlock rules)
+                       php tests/cloak_test.php (Invisibility: how long it lasts, reveals, drops)
                        php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
                          the browser's drive preview plans exactly the route the server drives)
-                       php tests/crate_gate.php /tmp/s.json   (crates land in the circle between the tanks)
+                       php tests/crate_gate.php /tmp/s.json   (paired crates: same distance from each tank, nearer its own, reachable;
+                         centre crates: in the circle between the tanks)
                        php tests/ai_bench.php [--no-drive]    (computer players: speed, accuracy and driving by skill)
+                       php tests/sim_matches.php 1 44 1 --skills > /tmp/k.json && node tests/replay_parity.js /tmp/k.json
+                         (the same replay check with every tank on a random loadout)
+                       php tests/loadout_bench.php pop 3000 1 > /tmp/b.jsonl && php tests/loadout_report.php /tmp/b.jsonl
+                         (phase 4 gate: AI vs AI to ranked rules, win rate of every doctrine, perk, preset and build;
+                          add -d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=128M to run ~3× faster)
 assets/              → CSS, JS, and a bundled copy of three.js (no CDN needed)
 sql/schema.sql       → schema for manual install
 ```

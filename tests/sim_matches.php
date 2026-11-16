@@ -3,7 +3,9 @@
  * Command-line only. Plays full matches with the real engine (no database) and writes what the server
  * would store: the starting terrain, every event, and the final state. tests/replay_parity.js then replays
  * those events the way the browser does and checks they agree. tests/crate_gate.php reads the same file.
- *   php tests/sim_matches.php [seed] [turns] [seeds per map] > /tmp/sims.json
+ *   php tests/sim_matches.php [seed] [turns] [seeds per map] [--skills] > /tmp/sims.json
+ * --skills (phase 4): every tank brings a random loadout (any doctrine, 0–2 perks), so the replays also cover
+ * wider craters, 7 bomblets, changed damage and fall damage, other hit radii, Scavenger claims and 125 hp tanks.
  *
  * Every map is played with 2, 3 and 4 tanks, both as Ranked (ranked-safe power-ups, fair crates) and as
  * Casual (every power-up, crates anywhere). Tanks shoot at enemies, buildings and crates, and use every
@@ -13,6 +15,7 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit;
 define('ART3D', true);
 $GLOBALS['ART_CFG'] = ['wind_max' => 8, 'move_per_turn' => 10, 'regen_per_turn' => 3];
+$skills = in_array('--skills', $argv, true); $argv = array_values(array_diff($argv, ['--skills']));
 function cfg(string $k, $d = null) { return $GLOBALS['ART_CFG'][$k] ?? $d; }
 require dirname(__DIR__) . '/includes/engine.php';
 
@@ -23,13 +26,13 @@ function resolve_deaths_sim(array &$players, int $turn): array
     return $dead;
 }
 /** Aim roughly at a point, with noise so some shells miss, splash or hit buildings and crates. */
-function aim_at(array $me, float $tx, float $tz, array $rules): array
+function aim_at(array $me, float $tx, float $tz, array $rules, float $maxPow = 100.0): array
 {
     $dx = $tx - $me['x']; $dz = $tz - $me['z']; $dist = hypot($dx, $dz);
     $yaw = fmod(rad2deg(atan2($dx, -$dz)) + 360 + (rnd() - .5) * 10, 360);
     $elev = 30 + rnd() * 40;
     $v = sqrt($dist * $rules['gravity'] / max(.2, sin(2 * deg2rad($elev))));
-    return [$yaw, $elev, min(100.0, max(10.0, $v / ENG_VMAX * 100 * (0.92 + rnd() * .16)))];
+    return [$yaw, $elev, min($maxPow, max(10.0, $v / ENG_VMAX * 100 * (0.92 + rnd() * .16)))];
 }
 $jsonClean = fn($x) => json_decode(json_encode($x, JSON_PRESERVE_ZERO_FRACTION), true);
 
@@ -46,6 +49,14 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
     $players = [];
     foreach ($gen['spawns'] as $s => $p) $players[$s] = ['seat' => $s, 'x' => $p[0], 'y' => $p[1], 'z' => $p[2], 'hp' => 100, 'alive' => true,
                                                         'last_hit_by' => null, 'damage_dealt' => 0, 'death_turn' => null, 'item' => null];
+    if ($skills) {
+        $all = all_loadouts(true);
+        foreach ($players as &$pl) {
+            $lo = $all[mt_rand(0, count($all) - 1)];
+            $pl['loadout'] = $lo; $pl['sk'] = skill_mods($lo); $pl['max_hp'] = $pl['hp'] = loadout_hp($lo);
+        }
+        unset($pl);
+    }
     $initial = base64_encode($t->pack());
     $objects0 = $objects;
     [$wa, $ws] = initial_wind($rules);
@@ -63,8 +74,9 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
         if ($fx) {
             foreach ($fx['crates'] ?? [] as $c) {
                 $stats['drops']++;
-                $fair[] = ['x' => $c['x'], 'z' => $c['z'], 'turn' => $turn,
-                           'tanks' => array_values(array_map(fn($p) => [$p['x'], $p['z']], array_filter($players, fn($p) => $p['alive'])))];
+                $fair[] = ['x' => $c['x'], 'z' => $c['z'], 'turn' => $turn, 'for' => $c['for'] ?? null, 'd' => $c['d'] ?? null,
+                           'tanks' => array_values(array_map(fn($p) => [$p['x'], $p['z']], array_filter($players, fn($p) => $p['alive']))),
+                           'by_seat' => array_map(fn($p) => [$p['x'], $p['z'], $p['alive']], $players)];
             }
             $fx['deaths'] = resolve_deaths_sim($players, $turn);
             $fx['wind'] = wind_vec($wa, $ws);
@@ -118,7 +130,7 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
             $standing = array_values(array_filter($objects, fn($o) => $o['type'] === 'building' && $o['hp'] > 0));
             if ($crates && rnd() < .45) { $c = $crates[mt_rand(0, count($crates) - 1)]; $tx = $c['x']; $tz = $c['z']; }
             elseif ($standing && rnd() < .4) { $o = $standing[mt_rand(0, count($standing) - 1)]; $tx = $o['x']; $tz = $o['z']; }
-            [$yaw, $elev, $power] = aim_at($me, $tx, $tz, $rules);
+            [$yaw, $elev, $power] = aim_at($me, $tx, $tz, $rules, max_power($me));
             $w = $wk && $k === 0 ? $wk : ['shell', 'shell', 'heavy', 'cluster'][mt_rand(0, 3)];
             if ($w === $wk) { $players[$seat]['item'] = null; $stats['uses'][$w] = ($stats['uses'][$w] ?? 0) + 1; }
             FX::$e['range'] = array_values(array_diff(FX::$e['range'], [$seat]));
@@ -136,6 +148,8 @@ foreach (array_keys(MAPS) as $mi => $mapId) foreach ([2, 3, 4] as $np) foreach (
     }
     $out[] = ['map' => $mapId, 'players_n' => $np, 'game_mode' => $gm, 'rules' => $rules, 'initial' => $initial, 'final' => base64_encode($t->pack()),
               'spawns' => $gen['spawns'], 'objects' => $objects0, 'objects_final' => $objects,
+              'loadouts' => array_values(array_map(fn($p) => isset($p['loadout']) ? loadout_key($p['loadout']) : null, $players)),
+              'hp0' => array_values(array_map(fn($p) => max_hp($p), $players)),
               'players_final' => array_values(array_map(fn($p) => ['hp' => $p['hp'], 'x' => round($p['x'], 3), 'y' => round($p['y'], 3), 'z' => round($p['z'], 3),
                                                                   'alive' => $p['alive'], 'item' => $p['item']], $players)),
               'events' => $events, 'crate_drops' => $fair, 'stats' => $stats + ['turns' => $turn]];

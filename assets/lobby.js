@@ -38,8 +38,11 @@
     $$('#modeSeg button').forEach(x => x.classList.remove('on'));
     b.classList.add('on'); mode = +b.dataset.mode;
   });
+  const baseTitle = document.title;
   function showSearching(on) {
     $('#searching').hidden = !on; $('#findBtn').hidden = on;
+    document.querySelector('.hero').classList.toggle('busy', on);
+    document.title = on ? 'Searching… · ' + baseTitle : baseTitle;   // visible in the browser tab while you wait
     $$('#modeSeg button').forEach(b => b.disabled = on);
     $('#casualMap').disabled = on;
     lockTabs(on);
@@ -167,6 +170,80 @@
     if (s.match_id) { location.href = 'play.php?id=' + s.match_id; return; }
     $('#aiStart').disabled = false; if (s.error) showErr(s.error);
   };
+
+  /* ---------- loadout (phase 4): presets or a custom build of unlocked skills ---------- */
+  const LO = { d: null, pick: null, rp: null };     // d: GET api/loadout.php; pick: the loadout being edited
+  const loApi = body => call('api/loadout.php', body);
+  const LOERR = { locked: "That skill isn't unlocked at your level yet.", bad_loadout: 'Pick a doctrine and up to 2 perks.', ranked_preset: 'Pick a preset for ranked.' };
+  function partsOf(lo) {
+    const c = LO.d.catalog;
+    if (lo.preset) { const p = c.presets[lo.preset]; return { name: p.name, doctrine: p.doctrine, perks: p.perks, preset: lo.preset }; }
+    return { name: c.doctrines[lo.doctrine].name, doctrine: lo.doctrine, perks: lo.perks || [], preset: null };
+  }
+  function skillLine(lo) {
+    const c = LO.d.catalog, p = partsOf(lo);
+    return `${p.preset ? `<b>${esc(p.name)}</b> · ` : ''}<b>${c.doctrines[p.doctrine].icon} ${esc(c.doctrines[p.doctrine].name)}</b>`
+      + (p.perks.length ? ' · ' + p.perks.map(k => `${c.perks[k].icon} ${esc(c.perks[k].name)}`).join(' · ') : ' · <span class="muted">no perks</span>');
+  }
+  const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  function renderLoSummary() {
+    const d = LO.d, u = d.uses, same = JSON.stringify(u.ranked) === JSON.stringify(u.other);
+    $('#loSummary').innerHTML = `<div>${skillLine(u.other)}</div>`
+      + (same ? '' : `<div class="lo-ranked">Ranked: ${skillLine(u.ranked)} <span class="muted">(custom builds in ranked from level ${d.catalog.ranked_free})</span></div>`);
+  }
+  function card(kind, id, def, on, locked) {
+    const c = LO.d.catalog;
+    const body = kind === 'preset'
+      ? `<div class="lo-desc">${esc(def.blurb)}</div><div class="lo-desc muted">${c.doctrines[def.doctrine].icon} ${esc(c.doctrines[def.doctrine].name)} · ${def.perks.map(k => c.perks[k].icon + ' ' + esc(c.perks[k].name)).join(' · ')}</div>`
+      : `<div class="lo-desc"><span class="gain">+</span> ${esc(def.gain)}</div><div class="lo-desc"><span class="cost">−</span> ${esc(def.cost)}</div>`;
+    return `<button type="button" class="lo-card${on ? ' on' : ''}${locked ? ' locked' : ''}" data-kind="${kind}" data-id="${id}" ${locked ? 'aria-disabled="true"' : ''} aria-pressed="${on}">
+      <div class="lo-name">${def.icon ? `<i>${def.icon}</i>` : ''}${esc(def.name)}${locked ? `<small>Level ${def.level}</small>` : ''}</div>${body}</button>`;
+  }
+  function renderPicker() {
+    const d = LO.d, c = d.catalog, pk = LO.pick, lvl = d.level;
+    const custom = !pk.preset;
+    $('#loPresets').innerHTML = Object.entries(c.presets).map(([id, p]) => card('preset', id, p, pk.preset === id, false)).join('');
+    const doc = custom ? pk.doctrine : null, perks = custom ? pk.perks : [];
+    $('#loDoctrines').innerHTML = Object.entries(c.doctrines).map(([id, x]) => card('doctrine', id, x, doc === id, x.level > lvl)).join('');
+    $('#loPerks').innerHTML = Object.entries(c.perks).map(([id, x]) => card('perk', id, x, perks.includes(id), x.level > lvl)).join('');
+    $('#loCustomNote').textContent = lvl >= c.ranked_free ? 'every skill unlocked' : 'skills unlock as you level up';
+    const low = lvl < c.ranked_free;
+    $('#loRankedBox').hidden = !(low && custom);
+    $('#loRankedNote').textContent = `below level ${c.ranked_free}, ranked uses a preset`;
+    $('#loRanked').innerHTML = Object.entries(c.presets).map(([id, p]) => `<button type="button" data-rp="${id}" class="${LO.rp === id ? 'on' : ''}">${esc(p.name)}</button>`).join('');
+    $('#loErr').hidden = true;
+  }
+  $('#loadout').addEventListener('click', e => {
+    const b = e.target.closest('.lo-card, #loRanked button'); if (!b || !LO.pick) return;
+    if (b.dataset.rp) { LO.rp = b.dataset.rp; return renderPicker(); }
+    if (b.classList.contains('locked')) { $('#loErr').textContent = `Unlocks at level ${b.querySelector('small').textContent.replace(/\D/g, '')}.`; $('#loErr').hidden = false; return; }
+    const { kind, id } = b.dataset, pk = LO.pick;
+    if (kind === 'preset') LO.pick = { preset: id };
+    else {
+      const cur = pk.preset ? { doctrine: 'standard', perks: [] } : { doctrine: pk.doctrine, perks: [...pk.perks] };
+      if (kind === 'doctrine') cur.doctrine = id;
+      else if (cur.perks.includes(id)) cur.perks = cur.perks.filter(k => k !== id);
+      else { cur.perks.push(id); if (cur.perks.length > 2) cur.perks.shift(); }
+      LO.pick = cur;
+    }
+    renderPicker();
+  });
+  const openPicker = on => {
+    $('#loPicker').hidden = !on; $('#loEdit').textContent = on ? 'Close' : 'Change'; $('#loEdit').setAttribute('aria-expanded', String(on));
+    document.querySelector('.hero').classList.toggle('picking', on);     // the picker takes the hero's full width
+    if (on) { const s = LO.d.saved; LO.pick = s.preset ? { preset: s.preset } : { doctrine: s.doctrine, perks: [...s.perks] }; LO.rp = s.ranked_preset; renderPicker(); }
+  };
+  $('#loEdit').onclick = () => LO.d && openPicker($('#loPicker').hidden);
+  $('#loCancel').onclick = () => openPicker(false);
+  $('#loSave').onclick = async () => {
+    $('#loSave').disabled = true;
+    try {
+      const r = await loApi({ loadout: LO.pick, ranked_preset: LO.rp });
+      if (r.error) { $('#loErr').textContent = LOERR[r.error] || 'Could not save (' + r.error + ').'; $('#loErr').hidden = false; return; }
+      LO.d = r; renderLoSummary(); openPicker(false);
+    } finally { $('#loSave').disabled = false; }
+  };
+  loApi().then(d => { LO.d = d; renderLoSummary(); }).catch(() => { $('#loSummary').textContent = "Couldn't load your loadout."; });
 
   // Resume a search or room already in progress (e.g. after a page reload) and show live queue counts.
   api('status').then(s => { if (s.queued && s.kind) setTab(s.kind); render(s); if (s.queued) start(); });

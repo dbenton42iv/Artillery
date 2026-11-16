@@ -36,7 +36,16 @@ const ITEMS = {
   rangefinder: { name: 'Rangefinder',    kind: 'instant', icon: '⌖', color: '#9be7c4', tip: 'Your aim arc shows the whole flight, wind included, for 1 shot' },
   flare:       { name: 'Flare',          kind: 'instant', icon: '✷', color: '#fff3a0', tip: 'Night maps only' },
   relocate:    { name: 'Relocate',       kind: 'turn',    icon: '⤧', color: '#e9a0ff', tip: 'Moves your tank 40 m or more to a random spot. Uses your turn' },
+  cloak:       { name: 'Invisibility',   kind: 'instant', icon: '◌', color: '#b9b3ff', tip: 'Enemies lose sight of you for 2 rounds: drive unseen, Hold fire to stay hidden. Firing reveals you' },
 };
+/* Invisibility: is this tank hidden (S.fx.cloak from the server), and how many of its own turns are left. */
+const cloakOf = seat => (S.fx && S.fx.cloak && S.fx.cloak[seat]) || null;
+function setCloak(seat, on) { if (!S.fx) S.fx = {}; if (!S.fx.cloak || Array.isArray(S.fx.cloak)) S.fx.cloak = {}; if (on) S.fx.cloak[seat] = { left: 2 }; else delete S.fx.cloak[seat]; }
+/** Your own hidden tank shows as a ghost (see-through); others' hidden tanks aren't drawn at all. */
+function ghost(P, on) {
+  if (P.ghost === on) return; P.ghost = on;
+  P.tank.group.traverse(o => { if (o.isMesh) { o.material.transparent = on; o.material.opacity = on ? .3 : 1; o.material.depthWrite = !on; o.castShadow = !on; } });
+}
 const MODE_NAMES = { ranked: 'RANKED', casual: 'CASUAL', private: 'PRIVATE', ai: 'VS AI' };
 const AI_NAMES = { rookie: 'Rookie', veteran: 'Veteran', ace: 'Ace' };
 const VMAX = 75, STEP = 1 / 120, PATH_EVERY = 4, TIME_SCALE = 1.45, TURRET_H = 2.05, BARREL = 3.2, D2R = Math.PI / 180;
@@ -330,18 +339,24 @@ function addCrate(c, dropping) {
   chute.add(lines); g.add(chute); chute.visible = dropping;
   const y = c.y ?? crateRest(c);
   g.position.set(c.x, dropping ? y + 45 : y, c.z); scene.add(g);
+  // paired drops: each crate belongs to a tank (it lands near it): a ring in that tank's colour, and its name
+  const owner = c.for != null ? S.P[c.for] : null;
+  if (owner) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 2.6, 32), new THREE.MeshBasicMaterial({ color: owner.color.hex, side: THREE.DoubleSide, transparent: true, opacity: .8 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = .08; g.add(ring);
+  }
   const label = document.createElement('div'); label.className = 'tl crate-l';
-  label.innerHTML = '<div style="color:#f0b429">Supply crate</div>';
+  label.innerHTML = owner ? `<div style="color:${owner.color.css}">${owner.seat === S.me ? 'Your crate' : esc(owner.name) + "'s crate"}</div>` : '<div style="color:#f0b429">Supply crate</div>';
   $('#labels').appendChild(label);
   CRATES.set(c.id, { ...c, y, group: g, chute, label, drop: dropping ? { t: 0, from: y + 45 } : null, bob: Math.random()*6 });
 }
 function removeCrate(id, how, by, item) {
   const C = CRATES.get(id); if (!C) return;
   const pos = C.group.position.clone().setY(C.group.position.y + 1);
-  if (how === 'claimed') {                                   // opened: now everyone sees what was inside
-    const P = S.P[by], it = ITEMS[item];
-    popup(`+${it ? it.name : item}`, pos.clone().setY(pos.y + 3), P ? P.color.css : '#fff'); noise(.25, 3000, .25, 1.2);
-    if (P) { P.item = item; banner(by === S.me ? `You got ${it ? it.name : item}!` : `${P.name} got ${it ? it.name : item}`, 1600); }
+  if (how === 'claimed') {                                   // opened: only the opener learns what was inside
+    const P = S.P[by], mine = by === S.me, it = mine ? ITEMS[item] : null;
+    popup(mine ? `+${it ? it.name : item}` : '+ power-up', pos.clone().setY(pos.y + 3), P ? P.color.css : '#fff'); noise(.25, 3000, .25, 1.2);
+    if (P) { P.item = mine ? item : 'sealed'; banner(mine ? `You got ${it ? it.name : item}!` : `${P.name} opened a crate`, 1600); }
   } else { spawnDebris(pos, 3, 0x6b4f2c, 6); popup('Crate lost', pos.clone().setY(pos.y + 3), '#d8d2c4'); }
   scene.remove(C.group); C.label.remove(); CRATES.delete(id);
 }
@@ -427,31 +442,66 @@ function updateVent(dt, time) {
 }
 
 /* ---------- tanks / markers / trails ---------- */
-function makeTank(color) {
+/* Cosmetics (garage.php): looks only. The hull takes the player's paint or camo; the turret keeps the team colour so
+ * every tank is still easy to tell apart; the barrel model changes the gun's look (shells still leave from the same point). */
+const camoTex = {};
+function hullMaterial(color, paint) {
+  if (paint && paint.camo && window.ARTCAMO) {
+    const k = paint.camo + paint.colors.join();
+    if (!camoTex[k]) { camoTex[k] = new THREE.CanvasTexture(ARTCAMO.canvas(paint.camo, paint.colors, 256)); camoTex[k].wrapS = camoTex[k].wrapT = THREE.RepeatWrapping; }
+    return new THREE.MeshStandardMaterial({ map: camoTex[k], roughness: .75, metalness: .1 });
+  }
+  return new THREE.MeshStandardMaterial({ color: paint && paint.color ? new THREE.Color(paint.color) : color, roughness: .55, metalness: .25 });
+}
+function makeTank(color, cos) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color, roughness: .55, metalness: .25 });
+  const paint = hullMaterial(color, cos && cos.paint);
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a2b28, roughness: .9 });
   const hull = new THREE.Group(); g.add(hull);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.1, 1.05, 4.2), mat); body.position.y = .95; hull.add(body);
-  const front = new THREE.Mesh(new THREE.BoxGeometry(3.1, .6, .9), mat); front.position.set(0, 1.0, -2.3); front.rotation.x = .5; hull.add(front);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.1, 1.05, 4.2), paint); body.position.y = .95; hull.add(body);
+  const front = new THREE.Mesh(new THREE.BoxGeometry(3.1, .6, .9), paint); front.position.set(0, 1.0, -2.3); front.rotation.x = .5; hull.add(front);
   for (const sx of [-1, 1]) { const t = new THREE.Mesh(new THREE.BoxGeometry(.85, .95, 4.7), dark); t.position.set(sx*1.65, .48, 0); hull.add(t); }
   const turret = new THREE.Group(); turret.position.y = 1.5; g.add(turret);
   turret.add(new THREE.Mesh(new THREE.SphereGeometry(1.15, 22, 12, 0, Math.PI*2, 0, Math.PI/2), mat));
   const pivot = new THREE.Group(); pivot.position.y = .55; turret.add(pivot);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(.19, .24, BARREL, 12), dark); barrel.rotation.x = -Math.PI/2; barrel.position.z = -BARREL/2; pivot.add(barrel);
+  const model = cos && cos.barrel ? cos.barrel.model : 'standard';
+  const [len, r0, r1] = model === 'short' ? [BARREL*.75, .27, .32] : model === 'long' ? [BARREL*1.3, .15, .21] : [BARREL, .19, .24];
+  for (const x of model === 'twin' ? [-.24, .24] : [0]) {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(model === 'twin' ? .14 : r0, model === 'twin' ? .18 : r1, len, 12), dark);
+    barrel.rotation.x = -Math.PI/2; barrel.position.set(x, 0, -len/2); pivot.add(barrel);
+    if (model === 'short') { const brake = new THREE.Mesh(new THREE.CylinderGeometry(.36, .36, .4, 12), dark); brake.rotation.x = -Math.PI/2; brake.position.z = -len; pivot.add(brake); }
+  }
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g);
   return { group: g, hull, turret, pivot, mat };
 }
 const marker = new THREE.Mesh(new THREE.ConeGeometry(.9, 1.8, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
 marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
+/* A shell's trail. style (cosmetics): line, rainbow (the colour runs through the spectrum), rings (smoke rings along
+ * the path) or sparks (glittering points). */
+const ringGeo = new THREE.TorusGeometry(1, .18, 6, 18);
 class Trail {
-  constructor(color, opacity = .85) { this.max = 5000; this.arr = new Float32Array(this.max*3); this.n = 0;
+  constructor(color, opacity = .85, style = 'line') { this.max = 5000; this.arr = new Float32Array(this.max*3); this.n = 0; this.style = style; this.extras = [];
     this.geo = new THREE.BufferGeometry(); this.geo.setAttribute('position', new THREE.BufferAttribute(this.arr, 3)); this.geo.setDrawRange(0, 0);
-    this.line = new THREE.Line(this.geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity })); this.line.frustumCulled = false; scene.add(this.line); }
-  push(x, y, z) { if (this.n >= this.max) return; const i = this.n*3; this.arr[i] = x; this.arr[i+1] = y; this.arr[i+2] = z; this.n++;
-    this.geo.attributes.position.needsUpdate = true; this.geo.setDrawRange(0, this.n); }
-  dispose() { scene.remove(this.line); this.geo.dispose(); this.line.material.dispose(); }
+    const rainbow = style === 'rainbow';
+    if (rainbow) { this.col = new Float32Array(this.max*3); this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3)); }
+    this.line = new THREE.Line(this.geo, new THREE.LineBasicMaterial({ color: rainbow ? 0xffffff : color, vertexColors: rainbow, transparent: true, opacity: style === 'rings' ? opacity*.45 : opacity }));
+    this.line.frustumCulled = false; scene.add(this.line);
+    if (style === 'rings') this.rmat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .6, depthWrite: false });
+    if (style === 'sparks') { this.sp = new Float32Array(2000*3); this.sn = 0; this.sgeo = new THREE.BufferGeometry(); this.sgeo.setAttribute('position', new THREE.BufferAttribute(this.sp, 3)); this.sgeo.setDrawRange(0, 0);
+      this.pts = new THREE.Points(this.sgeo, new THREE.PointsMaterial({ color: 0xfff6c8, size: .35, transparent: true, opacity: .95, depthWrite: false })); this.pts.frustumCulled = false; scene.add(this.pts); }
+  }
+  push(x, y, z) { if (this.n >= this.max) return; const i = this.n*3; this.arr[i] = x; this.arr[i+1] = y; this.arr[i+2] = z;
+    if (this.col) { const c = new THREE.Color().setHSL((this.n*.006) % 1, .9, .6); this.col[i] = c.r; this.col[i+1] = c.g; this.col[i+2] = c.b; this.geo.attributes.color.needsUpdate = true; }
+    if (this.rmat && this.n % 10 === 5 && this.n > 1) { const m = new THREE.Mesh(ringGeo, this.rmat); m.position.set(x, y, z);
+      m.lookAt(this.arr[i-3], this.arr[i-2], this.arr[i-1]); m.scale.setScalar(1 + Math.min(this.n, 200)/200); scene.add(m); this.extras.push(m); }
+    if (this.pts && this.sn < 1998) for (let k = 0; k < 2; k++) { const j = this.sn*3; this.sp[j] = x + (Math.random() - .5)*1.2; this.sp[j+1] = y + (Math.random() - .5)*1.2; this.sp[j+2] = z + (Math.random() - .5)*1.2; this.sn++;
+      this.sgeo.attributes.position.needsUpdate = true; this.sgeo.setDrawRange(0, this.sn); }
+    this.n++; this.geo.attributes.position.needsUpdate = true; this.geo.setDrawRange(0, this.n); }
+  dispose() { scene.remove(this.line); this.geo.dispose(); this.line.material.dispose();
+    for (const m of this.extras) scene.remove(m); if (this.rmat) this.rmat.dispose();
+    if (this.pts) { scene.remove(this.pts); this.sgeo.dispose(); this.pts.material.dispose(); } }
 }
 const guide = new Trail(0xffffff, .75);
 let envTrails = [];
@@ -511,7 +561,6 @@ function canDrive() { return myTurn() && moveLeft() >= AT.DRIVE.MIN && !(S.fx &&
 function driveBlockers() {
   const D = AT.DRIVE, c = [], b = [];
   for (const Q of S.P) if (Q.seat !== S.me) c.push([Q.x, Q.z, D.TANK_R]);
-  for (const C of CRATES.values()) c.push([C.x, C.z, D.CRATE_R]);
   for (const O of OBJ) if (O && !O.gone && O.hp > 0) b.push([O.x, O.z, O.hw + D.BUILDING_PAD, O.hd + D.BUILDING_PAD]);
   return { c, b };
 }
@@ -587,6 +636,16 @@ function updateDriveVisuals(mine, time) {
   drvRing.material.opacity = .6 + .2 * Math.sin(time * 3);
   if (DRV.res) { drvPath.visible = true; drvEnd.visible = true; drvEnd.rotation.z += .02; }
 }
+/** Would this planned hop pass over a crate? Same test as crate_pickups() on the server: within 2.5 m (Scavenger 3.5) of the route. */
+function pickupOnRoute(me, r) {
+  const R = me.loadout && (me.loadout.perks || []).includes('scavenger') ? 3.5 : 2.5;
+  const dx = r.x - me.x, dz = r.z - me.z, L2 = dx*dx + dz*dz;
+  for (const C of CRATES.values()) {
+    const k = L2 > 0 ? Math.max(0, Math.min(1, ((C.x - me.x)*dx + (C.z - me.z)*dz) / L2)) : 0;
+    if (Math.hypot(C.x - (me.x + dx*k), C.z - (me.z + dz*k)) <= R) return true;
+  }
+  return false;
+}
 function syncDriveUI(me, mine) {
   const b = $('#driveBtn'), fb = $('#fire');
   if (b) {
@@ -602,12 +661,16 @@ function syncDriveUI(me, mine) {
     const r = DRV.res, ok = r && r.used >= AT.DRIVE.MIN;
     fb.disabled = !ok;
     $('#whoTag').textContent = !r ? (DEV.touch ? 'Tap the ground where you want to go' : 'Click the ground to drive there · Esc to aim')
-      : ok ? `${r.used.toFixed(1)} m${r.stop !== 'arrived' ? ` (${STOP_TEXT[r.stop]})` : ''}${DEV.touch ? ' · press DRIVE' : ''}` : `Can't go that way: ${STOP_TEXT[r.stop]}`;
+      : ok ? `${r.used.toFixed(1)} m${r.stop !== 'arrived' ? ` (${STOP_TEXT[r.stop]})` : ''}${pickupOnRoute(me, r) ? ' · picks up the crate' : ''}${DEV.touch ? ' · press DRIVE' : ''}` : `Can't go that way: ${STOP_TEXT[r.stop]}`;
   }
 }
 /** Replay a 'move' event: the tank drives along the recorded path, kicking up dust. */
 function startMoveEvent(e) {
   const d = e.data, P = S.P[e.seat];
+  if (d.hidden) {                                    // an invisible tank drove somewhere: only that it moved
+    for (const c of d.pickup || []) removeCrate(c.id, 'claimed', c.by, c.item);
+    banner(`${P.name} moves, unseen`, 1200); S.playing = { kind: 'msg', t: 0, dur: 1 }; syncUI(); return;
+  }
   if (e.seat === S.me) { DRV.on = false; clearPreview(); if (DEV.phone) setDrawer(true); }
   const pts = d.path.map(p => new THREE.Vector3(p[0], p[1], p[2])), cum = [0];
   for (let k = 1; k < pts.length; k++) cum.push(cum[k-1] + pts[k].distanceTo(pts[k-1]));
@@ -621,6 +684,7 @@ function updateMove(pl, dt) {
   const P = pl.P;
   if (pl.t >= pl.dur) {                                        // arrived: a short pause, then the next event
     pl.end += dt;
+    if (!pl.picked) { pl.picked = true; for (const c of pl.d.pickup || []) removeCrate(c.id, 'claimed', c.by, c.item); }   // drove over a crate
     if (pl.end > .45) { [P.x, P.y, P.z] = pl.d.to; if (P.seat === S.me) camBehind({ ...P, yaw: S.aim.yaw }); endEvent(); }
     return;
   }
@@ -665,7 +729,12 @@ function spawnDebris(pos, R, color = 0x4a3a28, up = 8) {
     const a = Math.random()*Math.PI*2, s = 4 + Math.random()*R*1.4; scene.add(b);
     effects.push({ kind: 'debris', mesh: b, t: 0, dur: 2.5, vel: new THREE.Vector3(Math.cos(a)*s, up + Math.random()*R*1.6, Math.sin(a)*s), spin: Math.random()*8 }); }
 }
-function spawnExplosion(pos, R, hot = 0xffc04a) {
+const CONFETTI = [0xe5484d, 0x4aa8ff, 0x3ddc84, 0xf0b429, 0xb07cff];
+function spawnExplosion(pos, R, hot = 0xffc04a, style = 'standard') {
+  if (style === 'sparks') spawnDebris(pos, R*.7, 0xffe08a, 14);                 // cosmetics: the shooter's blast style (looks only)
+  else if (style === 'confetti') for (const c of CONFETTI) spawnDebris(pos, R*.35, c, 12);
+  else if (style === 'smoke') { const ring = new THREE.Mesh(new THREE.TorusGeometry(1, .35, 8, 28), new THREE.MeshBasicMaterial({ color: 0x5f5f5a, transparent: true, opacity: .8, depthWrite: false }));
+    ring.rotation.x = -Math.PI/2; ring.position.set(pos.x, pos.y + 1, pos.z); scene.add(ring); effects.push({ kind: 'ring', mesh: ring, t: 0, dur: 1.8, R: R*.9 }); }
   const m = new THREE.Mesh(fireGeo, new THREE.MeshBasicMaterial({ color: hot, transparent: true, opacity: 1, depthWrite: false }));
   m.position.copy(pos); scene.add(m); effects.push({ kind: 'fire', mesh: m, t: 0, dur: .55 + R*.03, R });
   addFlash(pos, 1 + R/8); spawnSmoke(pos, R*.8, 2.4);
@@ -717,6 +786,13 @@ function updateCamera(dt) {
   const cp = Math.cos(cam.pitch);
   camera.position.set(cam.target.x + Math.sin(cam.yaw)*cp*cam.dist, cam.target.y + Math.sin(cam.pitch)*cam.dist, cam.target.z + Math.cos(cam.yaw)*cp*cam.dist);
   const gh = heightAt(camera.position.x, camera.position.z); if (camera.position.y < gh + 2) camera.position.y = gh + 2;
+  // keep the view of the target clear: a tank down in a canyon would otherwise be hidden behind the canyon wall,
+  // so lift the camera until the line of sight clears the ground (it then looks down into the canyon)
+  const T = cam.target, C = camera.position;
+  for (let i = 1; i < 12; i++) {
+    const f = i / 12, need = T.y + (heightAt(T.x + (C.x - T.x)*f, T.z + (C.z - T.z)*f) + 1.5 - T.y) / f;
+    if (need > C.y) C.y = need;
+  }
   camera.lookAt(cam.target);
 }
 const ptrs = new Map(); let pinch0 = 0, tap = null;
@@ -750,25 +826,47 @@ function decodeTerrain(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Float32Array(bytes.buffer);
 }
+/* ---------- skills (phase 4): loadouts are public, and a few change what this page shows ---------- */
+let SKILLS = { doctrines: {}, perks: {}, presets: {} };
+const maxHp = P => P && P.max_hp ? P.max_hp : 100;
+const hpPct = P => Math.max(0, Math.min(100, 100 * P.hp / maxHp(P)));
+const maxPow = () => { const me = S.P[S.me]; return me && me.max_power ? me.max_power : 100; };
+function loParts(lo) {
+  if (!lo) return null;
+  const d = SKILLS.doctrines[lo.doctrine], ps = (lo.perks || []).map(k => SKILLS.perks[k]).filter(Boolean);
+  return d ? { name: lo.name, preset: lo.preset, d, ps } : null;
+}
+const loIcons = lo => { const p = loParts(lo); return p ? p.d.icon + p.ps.map(x => x.icon).join('') : ''; };
+const loText = lo => { const p = loParts(lo); return p ? `${p.preset ? p.name + ': ' : ''}${p.d.name}${p.ps.length ? ' · ' + p.ps.map(x => x.name).join(' · ') : ''}` : 'No loadout'; };
+/** Spotter: "12 m short · 3 m left" (seen from the shooter, toward the nearest enemy). */
+function spotText(sp) {
+  const L = Math.abs(sp.long) < 1 ? 'on range' : `${Math.round(Math.abs(sp.long))} m ${sp.long < 0 ? 'short' : 'long'}`;
+  const R = Math.abs(sp.right) < 1 ? 'on line' : `${Math.round(Math.abs(sp.right))} m ${sp.right < 0 ? 'left' : 'right'}`;
+  const Q = S.P[sp.seat];
+  return `${L} · ${R}${Q ? ' of ' + Q.name : ''}`;
+}
+
 function init(d) {
   RULES = d.map.rules; MAP = d.map.id; S.map = d.map;
+  if (d.skills) SKILLS = d.skills;
   N = RULES.n; SIZE = N * AT.CELL; HALF = SIZE / 2; MS = HALF / 120; G = RULES.gravity; WATER = RULES.water;
   applyTheme();
   initTerrain(decodeTerrain(d.terrain));
-  buildObjects(d.objects || []);
   buildVent();
   S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
   S.P = d.players.map(p => {
     const c = COLORS[p.seat], label = document.createElement('div');
-    label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div><div class="bar"><i style="background:${c.css}"></i></div>`;
+    label.className = 'tl'; label.innerHTML = `<div style="color:${c.css}"></div>${p.title ? `<div class="ttl">${esc(p.title)}</div>` : ''}<div class="bar"><i style="background:${c.css}"></i></div>`;
     $('#labels').appendChild(label);
-    const P = { ...p, color: c, tank: makeTank(c.hex), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
+    const P = { ...p, color: c, tank: makeTank(c.hex, p.cos), label, trails: [], yaw: ((Math.atan2(-p.x, p.z) / D2R) + 360) % 360, elev: 45, dead: false };
     P.hullYaw = P.yaw; P.tank.hull.rotation.y = -P.yaw*D2R;
     return P;
   });
+  buildObjects(d.objects || []);                    // after the tanks: paired crates show their tank's colour
   props.build(TH.props, [...S.P.map(p => [p.x, p.z, 9]), ...OBJ.map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]), ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : [])]);
   const me = S.P[S.me];
   S.aim.yaw = me.yaw;
+  $('#sPow').max = String(me.max_power || 100);                     // Fortified: 85
   applySnap(d);
   camBehind(me); cam.yaw = cam.tYaw; cam.target.copy(cam.tTarget); cam.dist = 120 * MS;
   S.loaded = true; $('#ovLoad').classList.remove('show');
@@ -780,8 +878,9 @@ function showMapIntro() {
   const m = S.map; if (!m) return;
   $('#mapLine').textContent = m.blurb;
   if (S.match.turn > 1) return;
-  const el = $('#mapIntro'); el.innerHTML = `<div class="mi-name">${esc(m.name)}</div><div class="mi-blurb">${esc(m.blurb)}</div>`;
-  el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, 3600);
+  const los = S.P.filter(q => q.loadout).map(q => `<div class="mi-lo"><b style="color:${q.color.css}">${esc(q.name)}</b> <span class="mi-ic">${loIcons(q.loadout)}</span> ${esc(loText(q.loadout))}${q.max_hp !== 100 ? ` <small>${q.max_hp} hp</small>` : ''}</div>`).join('');
+  const el = $('#mapIntro'); el.innerHTML = `<div class="mi-name">${esc(m.name)}</div><div class="mi-blurb">${esc(m.blurb)}</div>${los ? `<div class="mi-los">${los}</div>` : ''}`;
+  el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, los ? 6000 : 3600);
 }
 function setDead(P, boom) {
   if (P.dead) return; P.dead = true; P.alive = false;
@@ -796,7 +895,8 @@ function applySnap(d) {
   for (const p of d.players) {
     const P = S.P[p.seat]; if (!P) continue;
     Object.assign(P, { bot: p.bot, hp: p.hp, ammo: p.ammo, item: p.item, online: p.online, strikes: p.strikes, placement: p.placement, damage: p.damage,
-                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z });
+                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z,
+                       loadout: p.loadout, max_hp: p.max_hp, max_power: p.max_power, arc: p.arc, spotter: p.spotter, level: p.level, xp: p.xp });
     if (!p.alive && !P.dead) setDead(P, false);
     P.alive = p.alive;
   }
@@ -862,7 +962,7 @@ async function poll() {
     netFails = 0; netBar(null);
     if (!S.loaded) { try { init(d); } catch (e) { recover(e, 'load'); return; } }
     else {
-      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item' || e.type === 'move')) S.sent = false; }
+      for (const e of d.events) if (e.id > S.since) { S.queue.push(e); S.since = e.id; if (e.seat === S.me && (e.type === 'shot' || e.type === 'item' || e.type === 'move' || e.type === 'hold')) S.sent = false; }
       S.snap = d;
       if (!S.playing && !S.queue.length) applySnap(d);
     }
@@ -885,7 +985,7 @@ const ERR = { not_your_turn: "It isn't your turn.", stale_turn: 'That turn alrea
               no_ammo: 'No ammo left for that weapon.', not_active: 'This battle is over.', bad_csrf: 'Session expired. Reload the page.',
               no_item: "You don't have that power-up.", full_hp: 'Your tank is already at full health.', no_spot: 'No clear spot to move to. Try again later.',
               mid_double: 'Fire your second shot first.', already_on: 'Already active.', not_here: 'Flares only work on night maps.',
-              no_fuel: 'No driving left this turn.', cant_drive: "Can't drive that way.", no_driving: 'Driving is off in this match.',
+              no_fuel: 'No driving left this turn.', not_cloaked: 'You can only hold fire while invisible.', cant_drive: "Can't drive that way.", no_driving: 'Driving is off in this match.',
               server_error: 'The server had a problem. Try again.', network: 'Network error. Try again.' };
 async function useItem() {
   const me = S.P[S.me]; if (!myTurn() || !me || !me.item) return;
@@ -922,13 +1022,21 @@ function startEvent(e) {
     P.hp = 0; setDead(P, true); syncUI(); S.playing = { kind: 'msg', t: 0, dur: 1.8 }; return;
   }
   const d = e.data;
+  if (e.type === 'hold') {
+    banner(e.seat === S.me ? 'You hold fire and stay hidden' : `${P.name} holds fire`, 1600); S.playing = { kind: 'msg', t: 0, dur: 1.4 }; syncUI(); return;
+  }
   if (e.type === 'item') { startItemEvent(e); return; }
   if (e.type === 'move') { startMoveEvent(e); return; }
   AT.applyAll(AUTH, d.ops);                         // the exact terrain, in server order
   if (d.wind) S.wind = { ang: Math.atan2(d.wind[0], -d.wind[1]), spd: Math.hypot(d.wind[0], d.wind[1]) };
   if (e.type === 'turn') { startTurnEvent(e); return; }
+  if (d.reveal) {                                    // an invisible tank fires: it shows where it really is
+    [P.x, P.y, P.z] = d.reveal; setCloak(e.seat, false); spawnSmoke(new THREE.Vector3(P.x, P.y + 2, P.z), 3, 1.4, 0xb9b3ff, 3);
+    if (e.seat !== S.me) banner(`${P.name} reappears!`, 1500);
+  }
   if (d.aim && ITEMS[d.aim.weapon]) { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
   if (d.double) banner(e.seat === S.me ? 'Double Shot: fire again!' : `${P.name}: Double Shot`, 1500);
+  if (e.seat === S.me) recordShot(e);
   P.trails.forEach(t => t.dispose()); P.trails = [];
   for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q === P);
   S.playing = { kind: 'shot', e, P, owner: P, aim: d.aim, phase: 'turn', t: 0, T: 0, from: { yaw: P.yaw, elev: P.elev },
@@ -936,14 +1044,71 @@ function startEvent(e) {
   if (e.seat !== S.me) camBehind(P);
   syncUI();
 }
+/* ---------- shot cards: your last 3 shots, so after a detour (a crate, a drive) you can go back to an aim ---------- */
+const CARDS_KEY = 'art3d_shots_' + MID;
+let CARDS = []; try { CARDS = JSON.parse(localStorage.getItem(CARDS_KEY) || '[]') || []; } catch (e) { CARDS = []; }
+/** What a shot did, from the server's record: damage to enemies, a crate, the Spotter's range report, or a miss. */
+function shotResult(d) {
+  let dmg = 0, crate = null, kill = (d.deaths || []).some(s => s !== S.me);
+  for (const pr of d.projectiles || []) if (pr.boom) {
+    for (const h of pr.boom.hits || []) if (h.seat !== S.me) dmg += h.dmg + (h.abs || 0);
+    for (const c of pr.boom.crates || []) if (c.by === S.me) crate = c.item;
+  }
+  const oob = (d.projectiles || []).every(pr => !pr.boom);
+  return { dmg, kill, crate, spot: d.spot || null, oob };
+}
+function recordShot(e) {
+  const d = e.data; if (!d.aim) return;
+  CARDS.unshift({ turn: e.turn, yaw: d.aim.yaw, elev: d.aim.elev, power: d.aim.power, weapon: d.aim.weapon,
+                  wind: d.wind ? [Math.atan2(d.wind[0], -d.wind[1]), Math.hypot(d.wind[0], d.wind[1])] : null, res: shotResult(d) });
+  CARDS = CARDS.slice(0, 3);
+  try { localStorage.setItem(CARDS_KEY, JSON.stringify(CARDS)); } catch (err) {}
+  renderCards();
+}
+function cardResult(r) {
+  if (r.kill) return '<b class="ok">Destroyed!</b>';
+  if (r.dmg) return `<b class="ok">Hit −${r.dmg}</b>`;
+  if (r.crate) return `<b class="cr">Crate: ${esc(ITEMS[r.crate] ? ITEMS[r.crate].name : r.crate)}</b>`;
+  if (r.spot) return esc(spotText(r.spot));
+  return r.oob ? 'Out of range' : 'Miss';
+}
+function renderCards() {
+  const el = $('#shotCards'); if (!el) return;
+  el.hidden = !CARDS.length;
+  const html = CARDS.map((c, i) => {
+    // the wind relative to that shot's aim: ↑ blew with it (farther), ↓ against it, → / ← pushed it right / left
+    const rel = c.wind ? ((c.wind[0] / D2R - c.yaw) % 360 + 360) % 360 : 0;
+    const w = !c.wind || RULES && RULES.wind_max <= 0 ? 'no wind' : c.wind[1] < .5 ? 'calm'
+      : `<span title="Wind relative to this aim: ↑ with the shot, ↓ against it">${'↑↗→↘↓↙←↖'[Math.round(rel / 45) % 8]}</span> ${c.wind[1].toFixed(1)} m/s`;
+    const wn = WEAPONS[c.weapon] ? WEAPONS[c.weapon].name : ITEMS[c.weapon] ? ITEMS[c.weapon].name : c.weapon;
+    return `<button type="button" class="scard" data-i="${i}" title="Aim like this again (turn ${c.turn})">
+      <span class="ct">T${c.turn} · ${esc(wn)}</span><span class="ca">${Math.round(c.yaw)}° · ${c.elev.toFixed(1)}° · ${c.power.toFixed(1)}</span>
+      <span class="cw">wind ${w}</span><span class="cr2">${cardResult(c.res)}</span></button>`;
+  }).join('');
+  if (html !== el.dataset.html) { el.dataset.html = html; el.innerHTML = html; }   // only when it changed, so a tap never lands on a replaced button
+}
+$('#shotCards') && $('#shotCards').addEventListener('click', ev => {
+  const b = ev.target.closest('.scard'); if (!b) return;
+  const c = CARDS[+b.dataset.i]; if (!c || !myTurn()) return;
+  setAim('yaw', c.yaw); setAim('elev', c.elev); setAim('power', c.power);
+  const me = S.P[S.me];
+  if (WEAPONS[c.weapon] && (!me.ammo || me.ammo[c.weapon] !== 0)) S.aim.weapon = c.weapon;
+  banner(`Aim from turn ${c.turn}${c.power > maxPow() ? ' (power capped)' : ''}`, 1400); syncUI();
+});
+
 /** A power-up used from the weapon bar (shell power-ups arrive as shots instead). */
 function startItemEvent(e) {
   const d = e.data, P = S.P[e.seat], it = ITEMS[d.item] || { name: d.item };
   P.item = null;
   const who = e.seat === S.me ? 'You' : P.name, at = new THREE.Vector3(P.x, P.y + 5, P.z);
   let dur = 1.4;
-  if (d.item === 'repair') { P.hp = Math.min(100, P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
+  if (d.item === 'repair') { P.hp = Math.min(maxHp(P), P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
   else if (d.item === 'shield') { setShield(e.seat, true); shieldHit(e.seat); noise(.6, 900, .25, 1); }
+  else if (d.item === 'cloak') {
+    setCloak(e.seat, true); spawnSmoke(at.clone().setY(P.y + 2), 3.4, 1.6, 0xb9b3ff, 3); noise(.7, 600, .25, 1);
+    banner(e.seat === S.me ? 'You vanish! Drive unseen, then Hold fire to stay hidden' : `${P.name} vanished!`, 2200);
+    S.playing = { kind: 'msg', t: 0, dur: 1.8 }; syncUI(); return;
+  }
   else if (d.item === 'relocate') {
     const from = new THREE.Vector3(...d.from); spawnSmoke(from, 4, 2.2, 0xcfc8d8, 3); spawnSmoke(from.clone().setY(from.y + 3), 3, 1.8, 0xcfc8d8, 4);
     P.reloc = { t: 0, to: d.to }; P.x = d.to[0]; P.z = d.to[2]; P.y = d.to[1] + 40; dur = 2.6;
@@ -958,10 +1123,17 @@ function startTurnEvent(e) {
   const d = e.data, msgs = [];
   envTrails.forEach(t => t.dispose()); envTrails = [];
   for (const s of d.shield_end || []) setShield(s, false);
+  for (const c of d.cloak_end || []) { const Q = S.P[c.seat]; [Q.x, Q.y, Q.z] = c.at; setCloak(c.seat, false);
+    msgs.push(c.seat === S.me ? "You're visible again" : `${Q.name} is visible again`); }
   for (const b of d.burn || []) { const Q = S.P[b.seat]; Q.hp = Math.max(0, Q.hp - b.dmg); if (b.abs) shieldHit(b.seat);
     popup(b.dmg ? `-${b.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff9a4a'); }
   for (const id of d.fire_end || []) removeFire(id);
-  for (const c of d.crates || []) { addCrate(c, true); msgs.push('Supply drop!'); camAt(c.x, c.y, c.z, 90*MS); }
+  if ((d.crates || []).length) {
+    for (const c of d.crates) addCrate(c, true);
+    const mine = d.crates.find(c => c.for === S.me), at = mine || d.crates[0];
+    msgs.push(mine ? `Supply drop! Your crate is ${Math.round(mine.d || 0)} m away: drive over it.` : 'Supply drop!');
+    camAt(at.x, at.y, at.z, 90*MS);
+  }
   if (d.snow) {
     for (const op of d.ops) if (op[0] === 'f') AT.apply(VT, op);
     for (let k = 0; k < scorch.length; k++) scorch[k] *= .82;
@@ -974,7 +1146,7 @@ function startTurnEvent(e) {
     for (const h of d.sudden.drain) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); popup(`-${h.dmg}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff8a8a'); }
   }
   if (d.regen) {                                               // heal over time: the tank whose turn it is repairs a little
-    const Q = S.P[d.regen.seat]; Q.hp = Math.min(100, Q.hp + d.regen.heal);
+    const Q = S.P[d.regen.seat]; Q.hp = Math.min(maxHp(Q), Q.hp + d.regen.heal);
     popup(`+${d.regen.heal}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#7bd389');
   }
   if (msgs.length) banner(msgs.join(' '), 2200);
@@ -1014,7 +1186,8 @@ function updateEvent(dt) {
         const sz = pr.bomblet ? .3 : P ? WEAPONS[pl.aim.weapon].size : .75;
         pr.mesh = new THREE.Mesh(new THREE.SphereGeometry(sz, 12, 8), new THREE.MeshStandardMaterial({ color: P ? 0x1d1d1d : 0x5a1a00, emissive: col.hex, emissiveIntensity: P ? .5 : 1.4 }));
         pr.mesh.castShadow = true; scene.add(pr.mesh);
-        pr.trail = new Trail(col.hex, .8); (P ? P.trails : envTrails).push(pr.trail);
+        const tr = P && P.cos ? P.cos.trail : null;          // cosmetics: the shooter's trail (team colour unless they chose one)
+        pr.trail = new Trail(tr && tr.color ? new THREE.Color(tr.color).getHex() : col.hex, .8, tr ? tr.style : 'line'); (P ? P.trails : envTrails).push(pr.trail);
         if (!P) { const o = pr.path[0]; spawnSmoke(new THREE.Vector3(o[0], o[1], o[2]), 4*MS, 2.5, 0x4a3a34, 5); }
       }
       const local = pl.T - pr.t0, path = pr.path, ts = pr.ts, L = path.length;
@@ -1025,7 +1198,7 @@ function updateEvent(dt) {
         pr.done = true; scene.remove(pr.mesh); pr.mesh.geometry.dispose();
         if (pr.end === 'split') { addFlash(pr.mesh.position, .4); noise(.2, 2000, .3); }
         else if (pr.end === 'oob' && !pr.bomblet && P) banner('Out of range!', 1200);
-        if (pr.boom) boom(pr.boom, !P);
+        if (pr.boom) boom(pr.boom, !P, P && P.cos ? P.cos.blast.style : 'standard');
         continue;
       }
       const a = path[pr.seg], b = path[pr.seg + 1], span = ts[pr.seg + 1] - ts[pr.seg], u = span > 0 ? (local - ts[pr.seg]) / span : 1;
@@ -1047,19 +1220,21 @@ function updateEvent(dt) {
     }
     if (moving) return;
     for (const s of pl.deaths) { const Q = S.P[s]; banner(`${Q.name} destroyed!`, 1500); setDead(Q, true); }
-    pl.phase = 'end'; pl.t = 0; pl.wait = pl.deaths.length ? 1.4 : .8; syncUI();
+    const sp = pl.e && pl.e.type === 'shot' && pl.e.seat === S.me && pl.e.data.spot;
+    if (sp && !pl.deaths.length) { S.lastSpot = sp; banner(`Spotter: ${spotText(sp)}`, 2600); }
+    pl.phase = 'end'; pl.t = 0; pl.wait = pl.deaths.length ? 1.4 : sp ? 1.6 : .8; syncUI();
     return;
   }
   if (pl.phase === 'end') { pl.t += dt; if (pl.t > pl.wait) endEvent(); }
 }
-function boom(b, lava) {
+function boom(b, lava, style = 'standard') {
   const pos = new THREE.Vector3(b.x, b.y, b.z);
   if (b.splash) { spawnSplash(pos, b.vr); sndSplash(); }
   else if (b.mound) {                                   // Earthmover: the ground heaves up
     AT.raise(VT, b.x, b.z, b.vr, 5, 2); updateTerrainMesh();
     spawnSmoke(pos, b.vr*1.1, 2.6, 0x8a7458, 2.5); spawnDebris(pos, 5, 0x6a5238, 7); sndBoom(.5); addFlash(pos, .5);
   }
-  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : b.fire ? 0xff6a1a : 0xffc04a); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
+  else { crater(b.x, b.z, b.r); spawnExplosion(pos, b.vr, lava ? 0xff7a2a : b.fire ? 0xff6a1a : 0xffc04a, style); sndBoom(b.vr/11); props.blast(b.x, b.z, b.vr * 1.1); }
   if (b.fire) addFire(b.fire);
   for (const h of b.hits) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); if (h.abs) shieldHit(h.seat);
     popup(h.dmg ? `-${h.dmg}` : 'blocked', new THREE.Vector3(Q.x, Q.y + 5, Q.z), h.dmg ? Q.color.css : '#6cc6ff'); }
@@ -1086,8 +1261,26 @@ function buildWeaponButtons() {
   if ((S.map && S.map.move) > 0) {
     const db = document.createElement('button'); db.className = 'wep drive'; db.id = 'driveBtn'; db.onclick = () => setDrive(!DRV.on); w.appendChild(db);
   }
+  {
+    const hb = document.createElement('button'); hb.className = 'wep hold'; hb.id = 'holdBtn'; hb.hidden = true; hb.onclick = holdFire;
+    hb.title = 'End your turn without firing, so you stay hidden'; w.appendChild(hb);
+  }
 }
 function selectWeapon(k) { const me = S.P[S.me]; if (!me || !myTurn() || me.ammo[k] === 0) return; S.aim.weapon = k; syncUI(); }
+function syncHoldButton(me, mine) {
+  const b = $('#holdBtn'); if (!b) return;
+  const on = !!cloakOf(S.me) && !me.dead;
+  b.hidden = !on; b.disabled = !mine || S.sent;
+  b.innerHTML = `<span><i>◌</i>Hold fire</span><kbd>stay hidden${DEV.touch ? '' : ' · H'}</kbd>`;
+}
+async function holdFire() {
+  if (!myTurn() || !cloakOf(S.me)) return;
+  ac(); S.sent = true; setDrive(false, true); syncUI();
+  try {
+    const res = await post('api/hold.php', { match_id: MID, turn_no: S.match.turn });
+    if (res.error) { S.sent = false; banner(ERR[res.error] || 'Could not hold fire', 2200); syncUI(); }
+  } catch (e) { S.sent = false; banner('Network error. Try again.', 2000); syncUI(); }
+}
 function syncItemButton(me, mine) {
   const b = $('#itemBtn'); if (!b) return;
   const it = me.item ? ITEMS[me.item] : null;
@@ -1095,7 +1288,7 @@ function syncItemButton(me, mine) {
   b.classList.toggle('on', !!it && S.aim.weapon === me.item);
   b.classList.toggle('has', !!it);
   b.style.setProperty('--ic', it ? it.color : '');
-  b.title = it ? `${it.name}: ${it.tip}` : 'Power-up slot: shoot a supply crate (within 4 m) to claim what is inside';
+  b.title = it ? `${it.name}: ${it.tip}` : 'Power-up slot: drive over your supply crate, or shoot any crate (within 4 m), to claim what is inside';
   const act = !it ? 'empty' : it.kind === 'shell' ? (S.aim.weapon === me.item ? 'loaded' : 'load') : it.kind === 'turn' ? 'use · ends turn' : 'use';
   b.innerHTML = `<span>${it ? `<i>${it.icon}</i>${esc(it.name)}` : 'Power-up'}</span><kbd>${act}${DEV.touch || !it ? '' : ' · 4'}</kbd>`;
 }
@@ -1120,9 +1313,9 @@ function syncUI() {
   $('#boardStatus').innerHTML = boardStatus();
   $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
-    <div class="nm" style="color:${q.color.css}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
+    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : q.item === 'sealed' ? '<span class="it" style="--ic:#b8b2a4" title="Holding a power-up (only they know which)">?</span>' : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}${cloakOf(q.seat) && !q.dead ? '<span class="it ck" title="Invisible: you can\'t see where this tank is">◌</span>' : ''}</div>
     <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
-    <div class="hp"><i style="width:${q.hp}%;background:${q.hp > 50 ? '#7bd389' : q.hp > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
+    <div class="hp"><i style="width:${hpPct(q)}%;background:${hpPct(q) > 50 ? '#7bd389' : hpPct(q) > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
   if (!me) return;
   const cur = m ? S.P[m.seat] : null, mine = myTurn();
   const name = S.playing && S.playing.P ? S.playing.P : cur;
@@ -1130,15 +1323,17 @@ function syncUI() {
   $('#whoName').style.color = mine ? me.color.css : name ? name.color.css : '';
   const dbl = S.fx && S.fx.double, second = dbl && dbl.seat === m?.seat && dbl.shots > 0, armed = dbl && dbl.seat === m?.seat && !dbl.shots;
   $('#whoTag').textContent = !m ? '' : m.status === 'finished' ? 'Battle over' : me.dead ? 'You were destroyed. Watching the battle.'
-    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
+    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : cloakOf(S.me) ? `Invisible (${cloakOf(S.me).left > 1 ? 'this turn and next' : 'this turn'}). Firing reveals you` : S.lastSpot ? 'Last shot: ' + spotText(S.lastSpot) : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
   $('#panel').classList.toggle('off', !mine);
   $('#fire').disabled = !mine;
   document.querySelectorAll('.wep[data-k]').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
     b.classList.toggle('on', S.aim.weapon === k); b.disabled = a === 0;
     b.innerHTML = `<span>${WEAPONS[k].name}</span><kbd>${a == null ? '∞' : '×' + a}${DEV.touch ? '' : ' · ' + WEAPONS[k].key}</kbd>`; });
   syncItemButton(me, mine);
+  syncHoldButton(me, mine);
   syncDriveUI(me, mine);
   $('#forecast').innerHTML = forecastHtml();
+  renderCards();
   syncSliders();
   const bonus = m && RULES ? Math.max(0, m.turn - S.map.sudden_turn + 1) * (S.map.sudden_wind ?? .5) * (RULES.wind_max > 0 ? 1 : 0) : 0;
   $('#windSpd').innerHTML = RULES && RULES.wind_max <= 0 ? 'None' : S.wind.spd < .5 ? 'Calm' : `${S.wind.spd.toFixed(1)} m/s${bonus ? '<small class="sd"> +storm</small>' : ''}`;
@@ -1167,15 +1362,29 @@ function showEnd() {
     return `<tr><td class="place">${ord(p.placement)}</td><td style="color:${p.color.css};font-weight:700">${esc(p.name)}${p.seat === S.me ? ' <small style="color:var(--dim)">YOU</small>' : ''}</td>
       <td>${p.kills}</td><td>${p.damage}</td><td>${rated ? `${p.rating_after ?? p.rating} <span class="${d >= 0 ? 'up' : 'down'}">(${d >= 0 ? '+' : ''}${d})</span>` : ''}</td></tr>`; }).join('')
     + (rated ? '' : `<tr><td colspan="5" class="unrated">${{ private: 'Private match', ai: 'Battle against the AI', casual: 'Casual match' }[S.match.game_mode] || 'Unrated match'}: ratings unchanged.</td></tr>`);
+  $('#eXp').innerHTML = xpHtml(me.xp);
   $('#ovEnd').classList.add('show');
   marker.visible = false;
+}
+/** End screen: the XP this match earned, the level bar, and any skills a new level unlocked. */
+function xpHtml(x) {
+  if (!x || x.total == null) return '';
+  const lines = (x.lines || []).map(([, label, n]) => `<div class="xl"><span>${esc(label)}</span><b>+${n}</b></div>`).join('');
+  let lvl = '';
+  if (x.level_after != null) {
+    const up = x.level_after > x.level_before;
+    const news = up ? [...Object.values(SKILLS.doctrines), ...Object.values(SKILLS.perks)].filter(k => k.level > x.level_before && k.level <= x.level_after) : [];
+    lvl = `<div class="xlvl${up ? ' up' : ''}">${up ? `LEVEL UP! Level ${x.level_after}` : `Level ${x.level_after}`}</div>`
+      + (news.length ? `<div class="xnew">Unlocked: ${news.map(k => `<b>${k.icon} ${esc(k.name)}</b>`).join(', ')}. Pick them in the lobby under Loadout.</div>` : '');
+  }
+  return `<div class="xp-card"><div class="xh"><span>EXPERIENCE</span><b>+${x.total} XP</b></div>${lines}${lvl}</div>`;
 }
 $('#bStay').onclick = () => { $('#ovEnd').classList.remove('show'); camOverview(); };
 const setAim = (k, v) => {
   const a = S.aim;
   if (k === 'yaw') { a.yaw = ((v % 360) + 360) % 360; cam.tYaw = -a.yaw*D2R; }
   else if (k === 'elev') a.elev = clamp(v, 5, 85);
-  else a.power = clamp(v, 10, 100);
+  else a.power = clamp(v, 10, maxPow());
   syncSliders();
 };
 $('#sYaw').addEventListener('input', e => { if (!myTurn()) return syncSliders(); setAim('yaw', +e.target.value); });
@@ -1235,6 +1444,7 @@ addEventListener('keydown', e => {
   else if (k === 'escape') setDrive(false);
   else if (k === '1' || k === '2' || k === '3') selectWeapon(WKEYS[+k - 1]);
   else if (k === '4') useItem();
+  else if (k === 'h') holdFire();
   else if (k === 'v') camOverview(); else if (k === 'c') $('#bCam').click(); else if (k === 'm') $('#bMute').click();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
@@ -1246,8 +1456,8 @@ function handleKeys(dt) {
   if (has('arrowright', 'd')) { a.yaw = (a.yaw + 60*fine*dt) % 360; ch = true; cam.tYaw = -a.yaw*D2R; }
   if (has('arrowup', 'w')) { a.elev = clamp(a.elev + 25*fine*dt, 5, 85); ch = true; }
   if (has('arrowdown', 's')) { a.elev = clamp(a.elev - 25*fine*dt, 5, 85); ch = true; }
-  if (has('e', '=', '+')) { a.power = clamp(a.power + 25*fine*dt, 10, 100); ch = true; }
-  if (has('q', '-', '_')) { a.power = clamp(a.power - 25*fine*dt, 10, 100); ch = true; }
+  if (has('e', '=', '+')) { a.power = clamp(a.power + 25*fine*dt, 10, maxPow()); ch = true; }
+  if (has('q', '-', '_')) { a.power = clamp(a.power - 25*fine*dt, 10, maxPow()); ch = true; }
   if (ch) syncSliders();
 }
 
@@ -1264,14 +1474,17 @@ function updateVisuals(dt, time) {
   if (mine && me) { me.yaw = S.aim.yaw; me.elev = S.aim.elev; }
   for (const P of S.P) {
     const t = P.tank; t.group.position.set(P.x, P.y, P.z); t.hull.rotation.y = -P.hullYaw*D2R;
+    const hid = !!cloakOf(P.seat) && !P.dead && S.match && S.match.status === 'active';
+    t.group.visible = !(hid && P.seat !== S.me); ghost(P, hid && P.seat === S.me);
     t.turret.rotation.y = -P.yaw*D2R; if (!P.dead) t.pivot.rotation.x = P.elev*D2R;
     const s = project(v3.set(P.x, P.y + 4.6, P.z));
-    if (!s.vis) P.label.style.display = 'none';
+    if (!s.vis || !t.group.visible) P.label.style.display = 'none';
     else { P.label.style.display = ''; P.label.style.left = s.x + 'px'; P.label.style.top = s.y + 'px';
-      P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = P.hp + '%'; }
+      P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = hpPct(P) + '%'; }
   }
   const m = S.match, cur = m && m.status === 'active' && !S.playing && !S.queue.length ? S.P[m.seat] : null;
-  if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
+  if (cur && cur.seat !== S.me && cloakOf(cur.seat)) marker.visible = false;
+  else if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
   else marker.visible = false;
   updateDriveVisuals(mine, time);
   if (mine && !DRV.on) {
@@ -1284,7 +1497,7 @@ function updateVisuals(dt, time) {
         for (let k = 0; k < 4; k++) { vel.x += wx*.4*STEP; vel.z += wz*.4*STEP; vel.y -= G*STEP; pos.addScaledVector(vel, STEP); }
         if (pos.y <= heightAt(pos.x, pos.z) || Math.abs(pos.x) > HALF + 4 || Math.abs(pos.z) > HALF + 4) { guide.push(pos.x, Math.max(pos.y, heightAt(pos.x, pos.z)), pos.z); break; }
       }
-    } else for (let i = 0; i < 48; i++) { guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
+    } else for (let i = 0, n = Math.round(48 * (me.arc || 1)); i < n; i++) { /* Sharpshooter: twice as long */ guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
     guide.line.material.color.setHex(full ? 0x9be7c4 : 0xffffff);
     guide.line.visible = true;
   } else guide.line.visible = false;
@@ -1330,4 +1543,6 @@ function loop() {
   } catch (err) { S.playing = null; recover(err, 'replay'); }
 }
 loop(); poll();
+// automated browser tests open the page as play.php?id=N#test to read the page's state
+if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS };
 })();

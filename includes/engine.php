@@ -3,6 +3,7 @@ declare(strict_types=1);
 defined('ART3D') || exit;
 require_once __DIR__ . '/maps.php';
 require_once __DIR__ . '/items.php';
+require_once __DIR__ . '/skills.php';
 /*
  * Server-side game engine. The server is the referee: clients send only their aim (turret, angle,
  * power, weapon) and the server flies the shell, digs craters and applies damage. The browser
@@ -32,6 +33,31 @@ const MAX_HP = 100;
 
 /** Hit points a living tank repairs at the start of its own turn (rules 'regen'; older matches use the site setting). */
 function regen_rate(array $rules): int { return max(0, (int)($rules['regen'] ?? cfg('regen_per_turn', 3))); }
+
+/** A tank's skill number (phase 4, from its loadout: see skill_mods() in skills.php), or the neutral default. */
+function sk(array $pl, string $k, $def) { return $pl['sk'][$k] ?? $def; }
+/** A tank's maximum hp: 100, or more or less with its loadout (Fortified, Reinforced Tracks, Low Profile). */
+function max_hp(array $pl): int { return (int)($pl['max_hp'] ?? MAX_HP); }
+/** Highest power a tank can fire (Fortified: 85). */
+function max_power(array $pl): float { return (float)sk($pl, 'max_power', 100.0); }
+
+/**
+ * A weapon as fired by a tank with skills: blast damage (Meteorologist −2, then Demolitions ×0.9; Bomblet Pack's
+ * bomblets −5 each; Heavy Gunner's Heavy −5), Cluster bomblet count, and the shooter's crater width, crate claim radius, fire duration and
+ * fall-damage multiplier, which explode_at() and settle() read.
+ */
+function shooter_weapon(string $wk, array $shooter): array
+{
+    $w = WEAPONS[$wk];
+    if ($wk === 'cluster') { $w['split'] = (int)sk($shooter, 'split', $w['split']); $w['dmg'] += (int)sk($shooter, 'bomblet_dmg', 0); }
+    if ($wk === 'heavy') $w['dmg'] += (int)sk($shooter, 'heavy_dmg', 0);           // Heavy Gunner: 65
+    if ($w['dmg'] > 0) $w['dmg'] = max(1, (int)round(($w['dmg'] + (int)sk($shooter, 'dmg_flat', 0)) * (float)sk($shooter, 'dmg_mult', 1.0)));
+    $w['crater'] = (float)sk($shooter, 'crater', 1.0);
+    $w['claim'] = (float)sk($shooter, 'claim', CRATE_CLAIM);
+    $w['fire_turns'] = max(1, FIRE_TURNS + (int)sk($shooter, 'item_turns', 0));
+    $w['fall'] = (float)sk($shooter, 'fall_dealt', 1.0);
+    return $w;
+}
 
 function rnd(): float { return mt_rand() / mt_getrandmax(); }
 function f32(float $v): float { return unpack('g', pack('g', $v))[1]; }
@@ -213,77 +239,164 @@ function circle_centre(array $pts): ?array
     return [$A / $det / 2, $B / $det / 2];
 }
 
+/*
+ * Elevation tiers (David's request, 16 Nov): tanks never start level with each other. Each map gives its tanks
+ * different heights (a ridge shoulder and a valley, a tall island and a low one, canyon floors at different depths),
+ * evenly spread between a low and a high level and dealt out at random, so no seat is favoured over many matches.
+ */
+
+/** $n heights spread evenly from $lo to $hi (a little jitter), in random order. */
+function tier_levels(int $n, float $lo, float $hi): array
+{
+    $gap = $n > 1 ? ($hi - $lo) / ($n - 1) : 0.0; $out = [];
+    for ($k = 0; $k < $n; $k++) $out[] = $n > 1 ? $lo + $k * $gap + (rnd() - .5) * $gap * .3 : ($lo + $hi) / 2;
+    for ($k = $n - 1; $k > 0; $k--) { $j = (int)floor(rnd() * ($k + 1)); [$out[$k], $out[$j]] = [$out[$j], $out[$k]]; }
+    return $out;
+}
+
+/**
+ * Raise or lower the ground around each tank to its tier: flat out to $r0 metres (ragged edge), blending back to the
+ * natural terrain by $r1. A high tier becomes a shoulder or mesa, a low one a hollow or shelf.
+ */
+function lift_spawns(callable $f, Noise $nz, array $spawns, array $levels, float $r0, float $r1): callable
+{
+    $h0 = array_map(fn($sp) => $f($sp[0], $sp[1]), $spawns);
+    return function (float $x, float $z) use ($f, $nz, $spawns, $levels, $h0, $r0, $r1) {
+        $h = $f($x, $z);
+        foreach ($spawns as $k => $sp) {
+            $d = hypot($x - $sp[0], $z - $sp[1]);
+            if ($d >= $r1 + 6) continue;
+            $d += ($nz->fbm($x * .07 + $k * 13.1, $z * .07 + 5) - .5) * 9;
+            if ($d < $r1) $h += ($levels[$k] - $h0[$k]) * (1 - smoothstep($r0, $r1, $d));
+        }
+        return $h;
+    };
+}
+
 function gen_highlands(Noise $nz, int $n, float $half, int $players): array
 {
     $s = $half / 120; $ang = rnd() * M_PI; $rx = cos($ang); $rz = sin($ang);
-    $mH = 18 + rnd() * 20; $mLen = (35 + rnd() * 25) * $s; $ox = rnd() * 100; $oz = rnd() * 100;
-    $f = function (float $x, float $z) use ($nz, $rx, $rz, $mH, $mLen, $ox, $oz, $half) {
+    $mH = 22 + rnd() * 16; $mLen = (35 + rnd() * 25) * $s; $ox = rnd() * 100; $oz = rnd() * 100;
+    // a second, lower ridge and a few knolls break up the slopes
+    $a2 = $ang + M_PI / 2 + (rnd() - .5); $r2x = cos($a2); $r2z = sin($a2); $off2 = (rnd() - .5) * 60 * $s;
+    $knolls = []; for ($k = 0; $k < (int)round(5 * $s * $s); $k++) $knolls[] = [(rnd() * 2 - 1) * 90 * $s, (rnd() * 2 - 1) * 90 * $s, 8 + rnd() * 9, (9 + rnd() * 7) * $s];
+    $f = function (float $x, float $z) use ($nz, $rx, $rz, $r2x, $r2z, $off2, $mH, $mLen, $ox, $oz, $half, $knolls, $s) {
         $h = $nz->fbm($x * .011 + $ox, $z * .011 + $oz) * 34 - 8;
         $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
         $h += $mH * exp(-($across * $across) / (2 * 15 * 15)) * exp(-($along * $along) / (2 * $mLen * $mLen));
+        $a2 = $x * $r2x + $z * $r2z; $c2 = -$x * $r2z + $z * $r2x - $off2;
+        $h += 12 * exp(-($c2 * $c2) / (2 * 9 * 9)) * exp(-($a2 * $a2) / (2 * (45 * $s) ** 2));
+        foreach ($knolls as [$kx, $kz, $kh, $kr]) { $d2 = ($x - $kx) ** 2 + ($z - $kz) ** 2; if ($d2 < 9 * $kr * $kr) $h += $kh * exp(-$d2 / (2 * $kr * $kr)); }
         return max(.3, .3 + ($h + 6) * edge_falloff($nz, $x, $z, $half));
     };
-    return [$f, ring_spawns($players, 74 * $s, 86 * $s), []];
+    $spawns = ring_spawns($players, 70 * $s, 80 * $s);
+    // tanks on shelves and shoulders of the hills, from a low valley pad to a high one
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.0, 22.0), 9.0, 28.0), $spawns, []];
 }
 
+/*
+ * Archipelago (remade 16 Nov, David's request): one big ring-shaped island, a torus, round a lagoon. The ring rises
+ * and falls in hills and low saddles; every tank sits on the ring at its own height, and the lagoon in the middle
+ * (with a few rocky islets) and the sea outside both splash shells.
+ */
 function gen_archipelago(Noise $nz, int $n, float $half, int $players): array
 {
-    $s = $half / 120; $base = rnd() * M_PI * 2;
-    $k = min(5, max(3, $players + (rnd() < .5 ? 1 : 0)));
-    if ($players === 2) $k = 3 + (rnd() < .5 ? 1 : 0);
-    $isl = []; $spawns = []; $r = (66 + rnd() * 10) * $s;
-    for ($i = 0; $i < $players; $i++) {                      // one island per tank, evenly around the ring
-        $a = $base + $i * M_PI * 2 / $players + (rnd() - .5) * .2;
-        $isl[] = [sin($a) * $r, -cos($a) * $r, (19 + rnd() * 5) * $s, 7 + rnd() * 5];
-        $spawns[] = [sin($a) * ($r - 2), -cos($a) * ($r - 2)];
+    $s = $half / 120; $Rr = (72 + rnd() * 6) * $s; $tube = 17 * $s;     // ring radius and half its width
+    $ox = rnd() * 100; $oz = rnd() * 100;
+    $spawns = ring_spawns($players, $Rr, $Rr);
+    $isl = [];                                              // islets in the lagoon
+    for ($k = 0, $tries = 0; $k < 3 && $tries < 30; $tries++) {
+        $a = rnd() * M_PI * 2; $r = rnd() * ($Rr - $tube - 14 * $s);
+        $c = [sin($a) * $r, -cos($a) * $r, (6 + rnd() * 5) * $s, 5 + rnd() * 7];
+        foreach ($isl as $o) if (hypot($o[0] - $c[0], $o[1] - $c[1]) < $o[2] + $c[2] + 6) continue 2;
+        $isl[] = $c; $k++;
     }
-    for ($j = 0; $j < $k - $players; $j++) {                 // extra islands in the gaps (or the middle)
-        if ($j < $players && $players < 4) {
-            $a = $base + ($j + .5) * M_PI * 2 / $players; $r = (30 + rnd() * 18) * $s;
-            $isl[] = [sin($a) * $r, -cos($a) * $r, (14 + rnd() * 6) * $s, 6 + rnd() * 8];
-        } else $isl[] = [0.0, 0.0, (16 + rnd() * 6) * $s, 8 + rnd() * 8];
-    }
-    $f = function (float $x, float $z) use ($nz, $isl) {
-        $h = -3 + $nz->fbm($x * .02, $z * .02) * 2;
-        foreach ($isl as $q => [$cx, $cz, $R, $ih]) {
-            $d = hypot($x - $cx, $z - $cz) + ($nz->fbm($x * .05 + $q * 7, $z * .05) - .5) * $R * .5;
-            if ($d >= $R) continue;
-            $prof = 1 - smoothstep($R * .35, $R, $d);
-            $h = max($h, -3 + $prof * ($ih + 3 + ($nz->fbm($x * .045 + 31, $z * .045 + $q) - .5) * 8));
+    $f = function (float $x, float $z) use ($nz, $Rr, $tube, $ox, $oz, $isl) {
+        $h = -3 + $nz->fbm($x * .02, $z * .02) * 2;                       // sea and lagoon floor
+        $r = hypot($x, $z); $ang = atan2($x, -$z);
+        $w = $tube * (.8 + .45 * $nz->fbm(cos($ang) * 2 + $ox, sin($ang) * 2 + $oz, 3));   // the ring's width varies
+        $d = abs($r - $Rr) + ($nz->fbm($x * .05 + 11, $z * .05) - .5) * 5;
+        if ($d < $w) {
+            // hills and saddles along the ring: crest 4–18 m, round in cross-section like a torus
+            $crest = 4 + 14 * $nz->fbm(cos($ang) * 1.6 + $oz, sin($ang) * 1.6 + $ox, 4);
+            $q = $d / $w;
+            $h = max($h, -3 + ($crest + 3) * sqrt(max(0.0, 1 - $q * $q)) + ($nz->fbm($x * .06 + 3, $z * .06) - .5) * 2.5);
+        }
+        foreach ($isl as $k => [$cx, $cz, $R, $ih]) {
+            $dd = hypot($x - $cx, $z - $cz); if ($dd > $R * 1.3) continue;
+            $dd += ($nz->fbm($x * .07 + $k * 5, $z * .07) - .5) * $R * .4;
+            if ($dd < $R) $h = max($h, -3 + ($ih + 3) * (1 - smoothstep($R * .3, $R, $dd)));
         }
         return max(.3, $h);
     };
-    return [$f, $spawns, []];
+    // each tank on the ring at its own height, from a low beach to a high bluff
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.5, 17.0), 8.0, 20.0), $spawns, []];
 }
 
+/*
+ * Canyon (remade 16 Nov, then made shallower and wider the same day): a plateau cut by wide winding canyons. Every tank starts down on the floor of its own
+ * canyon, at its own depth, and has to lob up over the rims; a canyon floor is a road it can drive along. One or two
+ * more canyons cross the plateau between them. Wind is strong and blows from any direction over the rims.
+ */
 function gen_canyon(Noise $nz, int $n, float $half, int $players): array
 {
-    $s = $half / 120; $a = rnd() * M_PI; $rx = cos($a); $rz = sin($a); $gw = 24 * $s;
-    $ox = rnd() * 100; $oz = rnd() * 100;
-    $wig = fn(float $along) => ($nz->fbm($along * .02 + 3, 5.5, 3) - .5) * 18 * $s;
-    $f = function (float $x, float $z) use ($nz, $rx, $rz, $gw, $ox, $oz, $half, $wig) {
-        $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
-        $ac = abs($across - $wig($along));
-        $plateau = 20 + $nz->fbm($x * .015 + $ox, $z * .015 + $oz) * 10;
-        $g = smoothstep($gw * .35, $gw, $ac + ($nz->fbm($x * .08, $z * .08) - .5) * 6);
-        $h = .6 + ($plateau - .6) * $g;
+    $s = $half / 120; $ox = rnd() * 100; $oz = rnd() * 100;
+    $spawns = ring_spawns($players, 68 * $s, 76 * $s);
+    $floors = tier_levels($players, 4.5, 11.0);   // floors well above the river level, even near the coast
+    $W = 19.0 * $s;                                          // canyon half-width (floor about 19 m wide, about 55 m rim to rim)
+    $cs = [];                                                // [x0, z0, dirx, dirz, floor, wiggle table, half-width]
+    $mk = function (float $x0, float $z0, float $a, float $floor, int $seed, float $w) use ($nz, $half, $s) {
+        $dx = sin($a); $dz = -cos($a); $L = (int)ceil($half * 1.6); $wig = [];
+        $w0 = $nz->fbm($seed * 7.3, 2.5, 3);
+        for ($t = -$L; $t <= $L; $t++) $wig[$t + $L] = ($nz->fbm($t * .018 + $seed * 7.3, 2.5, 3) - $w0) * 46 * $s;
+        return [$x0, $z0, $dx, $dz, $floor, $wig, $L, $w];
+    };
+    /** Closest the canyon's centre line comes to any tank other than $skip (inside the map). */
+    $clear = function (array $c, int $skip) use ($spawns, $half) {
+        [$x0, $z0, $dx, $dz, , $wig, $L] = $c; $best = INF;
+        for ($t = -$L; $t < $L; $t += 2) {
+            $x = $x0 + $dx * $t - $dz * $wig[$t + $L]; $z = $z0 + $dz * $t + $dx * $wig[$t + $L];
+            if (abs($x) > $half || abs($z) > $half) continue;
+            foreach ($spawns as $k => $sp) if ($k !== $skip) $best = min($best, hypot($x - $sp[0], $z - $sp[1]));
+        }
+        return $best;
+    };
+    $seedN = 1;
+    foreach ($spawns as $k => $sp) {                        // each tank's own canyon runs across the line to the centre,
+        $best = null;                                        // and doesn't lead to another tank
+        for ($try = 0; $try < 12; $try++) {
+            $a = atan2($sp[0], -$sp[1]) + M_PI / 2 + (rnd() - .5) * .9;
+            $c = $mk($sp[0], $sp[1], $a, $floors[$k], $seedN++, $W); $d = $clear($c, $k);
+            if (!$best || $d > $best[1]) $best = [$c, $d];
+            if ($d > 42 * $s) break;
+        }
+        $cs[] = $best[0];
+    }
+    for ($j = 0, $m = 1, $tries = 0; $j < $m && $tries < 40; $tries++) {   // a canyon between the tanks,
+        $a = rnd() * M_PI; $o = (rnd() - .5) * 40 * $s;                                   // well away from all of them
+        $c = $mk(cos($a) * $o, sin($a) * $o, $a, 2.0 + rnd() * 3, 20 + $tries, $W * (.8 + rnd() * .3));
+        if ($clear($c, -1) < 42 * $s) continue;
+        $cs[] = $c; $j++;
+    }
+    $f = function (float $x, float $z) use ($nz, $cs, $ox, $oz, $half, $s) {
+        $plat = 15 + $nz->fbm($x * .012 + $ox, $z * .012 + $oz) * 6;            // plateau, 15–21 m (canyons about 8–18 m deep)
+        $h = $plat;
+        foreach ($cs as [$x0, $z0, $dx, $dz, $floor, $wig, $L, $w]) {
+            $px = $x - $x0; $pz = $z - $z0;
+            $t = $px * $dx + $pz * $dz; $q = -$px * $dz + $pz * $dx;
+            $ti = (int)round($t); if ($ti < -$L || $ti >= $L) continue;
+            $off = $wig[$ti + $L]; $slope = $wig[$ti + $L + 1] - $wig[$ti + $L];
+            $d = abs($q - $off) / sqrt(1 + $slope * $slope) + ($nz->fbm($x * .09 + 3, $z * .09) - .5) * 3;
+            if ($d > $w * 1.5) continue;
+            $fl = $floor + max(0.0, abs($t) - 20) * .03;                          // floors rise gently away from the tank
+            // steep walls with a ledge part way up
+            $c = $fl + ($plat - $fl) * (.4 * smoothstep($w * .5, $w * .75, $d) + .6 * smoothstep($w * .95, $w * 1.4, $d));
+            $h = min($h, $c);
+        }
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    // tanks alternate sides of the gorge: seat 0 north, seat 1 south, ...
-    $bySide = [1 => [], -1 => []];
-    for ($k = 0; $k < $players; $k++) $bySide[$k % 2 === 0 ? 1 : -1][] = $k;
-    $spawns = [];
-    foreach ($bySide as $side => $seats) {
-        $m = count($seats);
-        foreach ($seats as $q => $seat) {
-            $along = $m === 1 ? (rnd() - .5) * 30 * $s : ($q === 0 ? -1 : 1) * (32 + rnd() * 10) * $s;
-            $across = $wig($along) + $side * (55 + rnd() * 8) * $s;
-            $spawns[$seat] = [$along * $rx - $across * $rz, $along * $rz + $across * $rx];
-        }
-    }
-    ksort($spawns);
-    return [$f, array_values($spawns), ['wind_axis' => atan2($rx, -$rz)]];
+    return [$f, $spawns, []];
 }
 
 function gen_volcano(Noise $nz, int $n, float $half, int $players): array
@@ -291,20 +404,25 @@ function gen_volcano(Noise $nz, int $n, float $half, int $players): array
     $s = $half / 120; $rR = 48 * $s; $wR = 9 * $s; $rc = 24 * $s;
     $f = function (float $x, float $z) use ($nz, $s, $rR, $wR, $rc, $half) {
         $r = hypot($x, $z);
-        $h = 4 + $nz->fbm($x * .02, $z * .02) * 6;
-        $h += (8 + $nz->fbm($x * .03 + 17, $z * .03) * 14) * exp(-(($r - $rR) ** 2) / (2 * $wR * $wR));   // ring of hills
+        $h = 4 + $nz->fbm($x * .02, $z * .02) * 8;
+        $h += (8 + $nz->fbm($x * .03 + 17, $z * .03) * 16) * exp(-(($r - $rR) ** 2) / (2 * $wR * $wR));   // ring of hills
         $h += 22 * max(0, 1 - $r / $rc) ** 1.6;                                                            // cone
         $h -= 6 * max(0, 1 - $r / (5 * $s)) ** 2;                                                          // vent
+        $h += 7 * max(0, $nz->fbm($x * .025 + 50, $z * .025) - .55) * 4;                                  // old lava domes
         return max(.3, .3 + ($h + 2) * edge_falloff($nz, $x, $z, $half));
     };
-    return [$f, ring_spawns($players, 76 * $s, 84 * $s), ['vent' => [0.0, 0.0]]];
+    $spawns = ring_spawns($players, 72 * $s, 80 * $s);
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 4.5, 18.0), 9.0, 26.0), $spawns, ['vent' => [0.0, 0.0]]];
 }
 
 function gen_arctic(Noise $nz, int $n, float $half, int $players): array
 {
     $a = rnd() * M_PI; $rx = cos($a); $rz = sin($a); $ox = rnd() * 100; $oz = rnd() * 100;
     $f = function (float $x, float $z) use ($nz, $rx, $rz, $ox, $oz, $half) {
-        $h = 3.2 + $nz->fbm($x * .008 + $ox, $z * .008) * 1.6;
+        // stepped ice shelves: terraces about 3.5 m apart with short ice cliffs between them
+        $q = $nz->fbm($x * .009 + $ox, $z * .009 + 3) * 4.2; $fl = floor($q); $fr = $q - $fl;
+        $h = 3.2 + 3.5 * ($fl + smoothstep(.82, 1.0, $fr)) - 3.5;
+        $h = max(3.2, $h) + $nz->fbm($x * .03, $z * .03) * .8;
         $along = $x * $rx + $z * $rz; $across = -$x * $rz + $z * $rx;
         $h += 7.5 * max(0, $nz->fbm($along * .012 + 7, $across * .045 + $oz, 4) - .5);                  // drifts
         $c = abs($nz->fbm($x * .012 + $oz, $z * .012 + $ox, 4) - .5);                                    // cracks between sheets
@@ -312,23 +430,43 @@ function gen_arctic(Noise $nz, int $n, float $half, int $players): array
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $spawns = ring_spawns($players, 70 * $half / 120, 80 * $half / 120);
+    // each tank on its own ice shelf: flat tops, cliff edges
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 3.5, 15.0), 12.0, 19.0), $spawns, []];
 }
 
 function gen_city(Noise $nz, int $n, float $half, int $players): array
 {
-    $f = function (float $x, float $z) use ($nz, $half) {
-        $h = 3.0 + $nz->fbm($x * .02, $z * .02) * .6;
+    $ox = rnd() * 100;
+    $f = function (float $x, float $z) use ($nz, $half, $ox) {
+        $h = 3.0 + max(0.0, $nz->fbm($x * .008 + $ox, $z * .008) - .3) * 34 + $nz->fbm($x * .02, $z * .02) * .6;   // a city on hills
         $e = edge_falloff($nz, $x, $z, $half);
         return max(.3, $h * $e - 3 * (1 - $e));
     };
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $spawns = ring_spawns($players, 70 * $half / 120, 80 * $half / 120);
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 3.5, 15.0), 10.0, 26.0), $spawns, []];
 }
 
 function gen_lunar(Noise $nz, int $n, float $half, int $players): array
 {
-    $f = fn(float $x, float $z) => 5 + $nz->fbm($x * .01, $z * .01) * 3 + $nz->fbm($x * .05 + 40, $z * .05) * .6;
-    return [$f, ring_spawns($players, 74 * $half / 120, 86 * $half / 120), []];
+    $s = $half / 120; $spawns = ring_spawns($players, 70 * $s, 80 * $s);
+    $mesas = [];                                             // flat-topped mesas, clear of the tanks
+    for ($k = 0, $tries = 0; $k < (int)round(5 * $s * $s) && $tries < 60; $tries++) {
+        $mx = (rnd() * 2 - 1) * 85 * $s; $mz = (rnd() * 2 - 1) * 85 * $s; $mr = (9 + rnd() * 9) * $s;
+        foreach ($spawns as $sp) if (hypot($mx - $sp[0], $mz - $sp[1]) < $mr + 28) continue 2;
+        $mesas[] = [$mx, $mz, $mr, 7 + rnd() * 7]; $k++;
+    }
+    $f = function (float $x, float $z) use ($nz, $mesas) {
+        $h = 5 + $nz->fbm($x * .01, $z * .01) * 6 + $nz->fbm($x * .05 + 40, $z * .05) * .6;
+        foreach ($mesas as $q => [$mx, $mz, $mr, $mh]) {
+            $d = hypot($x - $mx, $z - $mz); if ($d > $mr + 9) continue;
+            $d += ($nz->fbm($x * .08 + $q * 9, $z * .08) - .5) * 6;
+            if ($d < $mr + 6) $h += $mh * (1 - smoothstep($mr, $mr + 6, $d));
+        }
+        return $h;
+    };
+    // one tank up on a mesa, another down in a basin
+    return [lift_spawns($f, $nz, $spawns, tier_levels($players, 2.5, 15.0), 10.0, 22.0), $spawns, []];
 }
 
 /** Lunar craters: bowls with raised rims, carved after the base plain. */
@@ -377,7 +515,7 @@ function place_buildings(Terrain $t, array $spawns): array
 /** The style of cover each map raises: [shape (2 rounded, 3 pointed), bump radius, ridge half-length, extra height]. */
 const COVER_STYLE = [
     'highlands'   => [2, 9.0, 12.0, 2.5],      // grassy hill
-    'archipelago' => [3, 7.0, 6.0, 3.0],       // sea stack: a rocky islet
+    'archipelago' => [3, 7.0, 6.0, 3.0],       // sea stack: a rocky islet in the lagoon
     'canyon'      => [3, 5.0, 8.0, 2.5],       // rock pillars on the rim
     'volcano'     => [2, 8.0, 10.0, 2.5],      // ash mound
     'arctic'      => [3, 5.5, 16.0, 2.5],      // pressure ridge: a long jagged ice wall
@@ -489,6 +627,8 @@ function generate_map(string $mapId, int $players): array
         'crate_every' => max(1, (int)cfg('crate_every', CRATE_EVERY)), 'crate_max' => max(1, (int)cfg('crate_max', CRATE_MAX)),
         'crate_radius' => max(0.0, (float)cfg('crate_radius', CRATE_RADIUS)),
         'crate_high' => !empty($R['crate_high']),
+        // phase 4: one crate per tank, near it ('centre' = the old single crate between the tanks; older matches)
+        'crates' => cfg('crate_drops', 'paired') === 'centre' ? 'centre' : 'paired', 'crate_near' => max(8.0, (float)cfg('crate_near', CRATE_NEAR)),
     ];
     return ['terrain' => $t, 'spawns' => $pos, 'objects' => $objects, 'rules' => $rules];
 }
@@ -539,7 +679,7 @@ function hit_tank(array $players, array $p, ?int $owner, float $age): ?string
 {
     foreach ($players as $s => $pl) {
         if (!$pl['alive'] || ($owner !== null && $s === $owner && $age < .25)) continue;
-        if (sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1.1)) ** 2 + ($p[2] - $pl['z']) ** 2) < ENG_TANK_HIT) return 'tank';
+        if (sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1.1)) ** 2 + ($p[2] - $pl['z']) ** 2) < (float)sk($pl, 'hit_r', ENG_TANK_HIT)) return 'tank';
     }
     return null;
 }
@@ -645,7 +785,7 @@ function fly(Terrain $t, array &$players, array &$objects, array $projs, array $
 }
 
 /** Tanks drop into (or are lifted out of) the changed ground; long falls hurt. */
-function settle(Terrain $t, array &$players, array $rules): array
+function settle(Terrain $t, array &$players, array $rules, ?int $causer = null, float $causerMult = 1.0): array
 {
     $falls = []; $mult = (float)($rules['fall_mult'] ?? 1.0);
     foreach ($players as $s => &$pl) {
@@ -654,7 +794,9 @@ function settle(Terrain $t, array &$players, array $rules): array
         $drop = $pl['y'] - $g; $pl['y'] = $g; $dmg = 0;
         $abs = 0;
         if ($drop > 3 && $pl['alive']) {
-            [$dmg, $abs] = apply_damage($players, $pl, $s, (int)round(($drop - 3) * 4 * $mult), $pl['last_hit_by']);
+            // Demolitions: falls the shooter's shell causes count double; Reinforced Tracks: falls on you are halved
+            $k = $mult * ($causer !== null && $causer !== $s ? $causerMult : 1.0) * (float)sk($pl, 'fall_taken', 1.0);
+            [$dmg, $abs] = apply_damage($players, $pl, $s, (int)round(($drop - 3) * 4 * $k), $pl['last_hit_by']);
         }
         $f = ['seat' => $s, 'y' => round($g, 3), 'dmg' => $dmg];
         if ($abs) $f['abs'] = $abs;
@@ -677,15 +819,15 @@ function settle_crates(Terrain $t, array &$objects): void
  */
 function simulate_shot(Terrain $t, array &$players, array &$objects, int $seat, float $yaw, float $elev, float $power, string $wk, array $wind, array $rules): array
 {
-    $w = WEAPONS[$wk];
+    $me = $players[$seat];
+    $w = shooter_weapon($wk, $me);
     $y = deg2rad($yaw); $e = deg2rad($elev);
     $d = [cos($e) * sin($y), sin($e), -cos($e) * cos($y)];
-    $me = $players[$seat];
     $o = [$me['x'] + $d[0] * ENG_BARREL, $me['y'] + ENG_TURRET_H + $d[1] * ENG_BARREL, $me['z'] + $d[2] * ENG_BARREL];
     $sp = $power / 100 * ENG_VMAX;
     $ops = [];
     $projs = fly($t, $players, $objects, [new_proj($o, [$d[0] * $sp, $d[1] * $sp, $d[2] * $sp], 0.0, false)], $w, $seat, $wind, $rules, $ops);
-    $falls = settle($t, $players, $rules);
+    $falls = settle($t, $players, $rules, $seat, (float)$w['fall']);
     settle_crates($t, $objects);
     return ['projectiles' => $projs, 'ops' => $ops, 'falls' => $falls];
 }
@@ -720,7 +862,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
         $ops[] = $t->raise($p[0], $p[2], $w['radius'], (float)$w['mound'], 2);
         $out['mound'] = true;
     } elseif (!$splash) {
-        $Rc = $w['radius'] * ($p[1] < $t->water ? .8 : 1);
+        $Rc = $w['radius'] * ($p[1] < $t->water ? .8 : 1) * (float)($w['crater'] ?? 1.0);   // Demolitions: ×1.3
         $ops[] = $t->crater($p[0], $p[2], $Rc);
     }
     $reach = $R * 1.45; $hits = [];
@@ -728,7 +870,9 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
         if (!$pl['alive']) continue;
         $d = sqrt(($p[0] - $pl['x']) ** 2 + ($p[1] - ($pl['y'] + 1)) ** 2 + ($p[2] - $pl['z']) ** 2);
         if ($d < $reach) {
-            $dmg = (int)round($w['dmg'] * ($d < ENG_TANK_HIT ? 1 : (1 - ($d - ENG_TANK_HIT) / ($reach - ENG_TANK_HIT)) ** .9));
+            $hr = (float)sk($pl, 'hit_r', ENG_TANK_HIT);                // Low Profile: 2.1 m
+            $dmg = (int)round($w['dmg'] * ($d < $hr ? 1 : (1 - ($d - $hr) / ($reach - $hr)) ** .9));
+            if ($dmg > 0 && $d < 3 && sk($pl, 'dug_in', false)) $dmg = (int)round($dmg * (float)sk($pl, 'dug_in', 1.0));   // Dug In: 10% less
             if ($dmg > 0) {
                 [$lost, $abs] = apply_damage($players, $pl, $s, $dmg, $owner);
                 $h = ['seat' => $s, 'dmg' => $lost]; if ($abs) $h['abs'] = $abs;
@@ -739,7 +883,7 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
     unset($pl);
     if (!empty($w['fire']) && !$splash) {                           // Napalm: a fire zone that burns for 3 turns
         $id = FX::$e['fire_seq']++;
-        $fire = ['id' => $id, 'x' => round($p[0], 3), 'z' => round($p[2], 3), 'r' => FIRE_R, 'left' => FIRE_TURNS, 'owner' => $owner];
+        $fire = ['id' => $id, 'x' => round($p[0], 3), 'z' => round($p[2], 3), 'r' => FIRE_R, 'left' => (int)($w['fire_turns'] ?? FIRE_TURNS), 'owner' => $owner];
         FX::$e['fires'][] = $fire;
         $out['fire'] = $fire;
     }
@@ -747,13 +891,8 @@ function explode_at(Terrain $t, array &$players, array &$objects, array $p, arra
     foreach ($objects as $k => &$o) {                                // a blast within 4 m claims a crate; further out it wrecks it
         if ($o['type'] !== 'crate' || $o['state'] !== 'live') continue;
         $d = sqrt(($p[0] - $o['x']) ** 2 + ($p[1] - ($o['y'] + .8)) ** 2 + ($p[2] - $o['z']) ** 2);
-        if ($d <= CRATE_CLAIM && $owner !== null) {
-            // what's inside is decided only now, so nobody (not even a player reading the network traffic) knows before
-            $o['item'] ??= roll_item(item_pool((string)($o['pool'] ?? 'safe'))) ?? 'repair';
-            $prev = $players[$owner]['item'] ?? null;
-            $players[$owner]['item'] = $o['item'];
-            $o['state'] = 'claimed'; $o['by'] = $owner;
-            $crates[] = ['id' => $o['id'], 'by' => $owner, 'item' => $o['item'], 'lost' => $prev];
+        if ($d <= (float)($w['claim'] ?? CRATE_CLAIM) && $owner !== null) {   // Scavenger: 6 m
+            $crates[] = open_crate($players, $o, $owner);
         } elseif ($d < $R && !$mound) {
             $o['state'] = 'destroyed';                               // wrecked unopened: its contents never existed
             $crates[] = ['id' => $o['id'], 'by' => null];
@@ -801,6 +940,17 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
         unset($sh);
         foreach ($gone as $s) unset(FX::$e['shields'][$s]);
         if ($gone) { $out['shield_end'] = $gone; $did = true; }
+    }
+    if (!empty(FX::$e['cloak'])) {                                    // invisibility wears off at the start of its tank's 3rd turn
+        foreach (FX::$e['cloak'] as $s => $c) {
+            $s = (int)$s;
+            if (!$players[$s]['alive']) { unset(FX::$e['cloak'][$s]); continue; }
+            if ($s !== $seat) continue;
+            if (--FX::$e['cloak'][$s]['left'] > 0) continue;
+            unset(FX::$e['cloak'][$s]);
+            $out['cloak_end'][] = ['seat' => $s, 'at' => [round($players[$s]['x'], 3), round($players[$s]['y'], 3), round($players[$s]['z'], 3)]];
+            $did = true;
+        }
     }
     if ($rules['erupt_every'] > 0 && $turn % $rules['erupt_every'] === 0 && $rules['vent']) {
         [$vx, $vz] = $rules['vent']; $g = (float)$rules['gravity']; $s = $t->half / 120;
@@ -854,15 +1004,17 @@ function start_turn(Terrain $t, array &$players, array &$objects, array $rules, 
     // heal over time: the tank whose turn it is repairs a little, after this turn's damage, until sudden death
     if ($seat !== null && $turn < SD_TURN && ($r = regen_rate($rules)) > 0 && isset($players[$seat])) {
         $me = &$players[$seat];
-        if ($me['alive'] && $me['hp'] > 0 && $me['hp'] < MAX_HP) {
-            $heal = min($r, MAX_HP - $me['hp']); $me['hp'] += $heal;
+        if ($me['alive'] && $me['hp'] > 0 && $me['hp'] < max_hp($me)) {
+            $heal = min($r, max_hp($me) - $me['hp']); $me['hp'] += $heal;
             $out['regen'] = ['seat' => $seat, 'heal' => $heal]; $did = true;
         }
         unset($me);
     }
     $every = max(1, (int)($rules['crate_every'] ?? CRATE_EVERY));
-    if ($turn % $every === 0 && ($c = drop_crate($t, $players, $objects, $rules, $turn))) {
-        $out['crates'] = [$c]; $did = true;
+    if ($turn % $every === 0) {
+        $cs = ($rules['crates'] ?? 'centre') === 'paired' ? drop_paired($t, $players, $objects, $rules, $turn)
+            : (($c = drop_crate($t, $players, $objects, $rules, $turn)) ? [$c] : []);
+        if ($cs) { $out['crates'] = $cs; $did = true; }
     }
     return $did ? $out : null;
 }
@@ -969,6 +1121,77 @@ function drop_crate(Terrain $t, array $players, array &$objects, array $rules, i
     return $c;
 }
 
+/*
+ * Paired drops (phase 4, David's choice): one crate per tank, each the same distance from its own tank, so nobody has
+ * to give up a shot to get one. Drive over your crate to pick it up (a turn or two of driving), or shoot any crate as
+ * before: within 4 m claims it, a blast further out wrecks it, so an enemy's crate can be stolen or denied.
+ * A tank that still has a crate waiting gets no new one. Every crate in a drop is the same distance from its own tank
+ * (crate_near, 18 m by default; nearer or farther only if some tank has no clear spot at that distance), at least
+ * PAIR_MARGIN metres farther from every other tank, on dry ground the tank can drive to.
+ */
+const PAIR_MARGIN = 10.0;
+
+/**
+ * Clear, dry spots exactly $D metres from $seat's tank, nearer to it than to any other tank; with $reach, only those
+ * the tank can drive to (a tank stuck in a deep crater can't reach any, so the drop then falls back to unreachable spots).
+ */
+function paired_spots(Terrain $t, array $players, array $objects, int $seat, float $D, bool $reach = true): array
+{
+    $me = $players[$seat]; $out = []; $lim = $t->half - DRIVE_EDGE - 2;
+    $blk = drive_blockers($players, $objects, $seat); $a0 = rnd() * M_PI * 2;
+    for ($k = 0; $k < 24; $k++) {
+        $a = $a0 + $k / 24 * M_PI * 2;
+        $x = $me['x'] + sin($a) * $D; $z = $me['z'] - cos($a) * $D;
+        if (abs($x) > $lim || abs($z) > $lim || $t->heightAt($x, $z) < $t->water + DRIVE_SHORE + .2) continue;
+        foreach ($players as $s => $pl) if ($s !== $seat && $pl['alive'] && hypot($pl['x'] - $x, $pl['z'] - $z) < $D + PAIR_MARGIN) continue 2;
+        foreach ($objects as $o) {
+            if ($o['type'] === 'building' && $o['hp'] > 0 && abs($x - $o['x']) < $o['hw'] + 3 && abs($z - $o['z']) < $o['hd'] + 3) continue 2;
+            if ($o['type'] === 'crate' && $o['state'] === 'live' && hypot($o['x'] - $x, $o['z'] - $z) < 6) continue 2;
+        }
+        $out[] = [$x, $z];
+        if (!$reach) continue;
+        array_pop($out);
+        // the tank must be able to drive there: straight at it, within three times the distance of allowance
+        $r = drive_path($t, $blk, (float)$me['x'], (float)$me['z'], $x, $z, $D * 3);
+        if (hypot($r["x"] - $x, $r["z"] - $z) > CRATE_PICK - .3) continue;   // with a margin, so rounding never puts it out of reach
+        $out[] = [$x, $z];
+    }
+    return $out;
+}
+
+/** Drop one crate for each living tank that has none waiting. Returns the new crates (each with 'for' => seat). */
+function drop_paired(Terrain $t, array $players, array &$objects, array $rules, int $turn): array
+{
+    if (!item_pool((string)($rules['items'] ?? 'off'))) return [];
+    $waiting = [];
+    foreach ($objects as $o) if ($o['type'] === 'crate' && $o['state'] === 'live' && isset($o['for'])) $waiting[(int)$o['for']] = true;
+    // an invisible tank gets no crate this drop: where its crate lands would give it away
+    $seats = array_keys(array_filter($players, fn($p) => $p['alive'] && !isset($waiting[$p['seat']]) && !isset(FX::$e['cloak'][$p['seat']])));
+    if (!$seats) return [];
+    $near = (float)($rules['crate_near'] ?? CRATE_NEAR);
+    // one distance for everyone in this drop; spots each tank can drive to if possible, otherwise (a tank dug into
+    // a crater) any clear dry spot at that distance for that tank, which can still be shot open
+    foreach ([true, false] as $strict) foreach ([0, 3, -3, 6, -6, 10] as $dd) {
+        $D = max(8.0, $near + $dd); $pick = [];
+        foreach ($seats as $s) {
+            $sp = paired_spots($t, $players, $objects, $s, $D); $reach = true;
+            if (!$sp && !$strict) { $sp = paired_spots($t, $players, $objects, $s, $D, false); $reach = false; }
+            if (!$sp) continue 2;
+            $pick[$s] = [...$sp[mt_rand(0, count($sp) - 1)], $reach];
+        }
+        $out = [];
+        foreach ($pick as $s => [$x, $z, $reach]) {
+            $x = round($x, 3); $z = round($z, 3);
+            $c = ['id' => count($objects), 'type' => 'crate', 'x' => $x, 'z' => $z, 'y' => max($t->heightAt($x, $z), $t->water),
+                  'pool' => (string)$rules['items'], 'state' => 'live', 'turn' => $turn, 'for' => $s, 'd' => $D];
+            if (!$reach) $c['far'] = true;                          // its tank can't drive there right now
+            $objects[] = $c; $out[] = $c;
+        }
+        return $out;
+    }
+    return [];
+}
+
 /** Relocate: a random clear, fairly flat spot on land at least 40 m from where the tank is now. Null if none. */
 function relocate_spot(Terrain $t, array $players, array $objects, int $seat): ?array
 {
@@ -1004,16 +1227,57 @@ const DRIVE_TANK_R = 4.5, DRIVE_CRATE_R = 2.6, DRIVE_BUILDING_PAD = 1.8, DRIVE_M
 /** Per-turn driving allowance in metres for a match (matches from before phase 3 use the site setting). */
 function move_budget(array $rules): float { return max(0.0, (float)($rules['move'] ?? cfg('move_per_turn', 10))); }
 
-/** What a tank can't drive through: other tanks (wrecks too) and crates as circles, standing buildings as boxes. */
+/**
+ * What a tank can't drive through: other tanks (wrecks too) as circles, standing buildings as boxes.
+ * Crates don't block: driving over one picks it up (crate_pickups()).
+ */
 function drive_blockers(array $players, array $objects, int $seat): array
 {
     $b = ['c' => [], 'b' => []];
     foreach ($players as $s => $pl) if ($s !== $seat) $b['c'][] = [(float)$pl['x'], (float)$pl['z'], DRIVE_TANK_R];
     foreach ($objects as $o) {
-        if ($o['type'] === 'crate' && $o['state'] === 'live') $b['c'][] = [(float)$o['x'], (float)$o['z'], DRIVE_CRATE_R];
-        elseif ($o['type'] === 'building' && $o['hp'] > 0) $b['b'][] = [(float)$o['x'], (float)$o['z'], $o['hw'] + DRIVE_BUILDING_PAD, $o['hd'] + DRIVE_BUILDING_PAD];
+        if ($o['type'] === 'building' && $o['hp'] > 0) $b['b'][] = [(float)$o['x'], (float)$o['z'], $o['hw'] + DRIVE_BUILDING_PAD, $o['hd'] + DRIVE_BUILDING_PAD];
     }
     return $b;
+}
+
+/** Distance from point (px, pz) to the segment from (ax, az) to (bx, bz). */
+function seg_dist(float $px, float $pz, float $ax, float $az, float $bx, float $bz): float
+{
+    $dx = $bx - $ax; $dz = $bz - $az; $L2 = $dx * $dx + $dz * $dz;
+    $k = $L2 > 0 ? max(0.0, min(1.0, (($px - $ax) * $dx + ($pz - $az) * $dz) / $L2)) : 0.0;
+    return hypot($px - ($ax + $dx * $k), $pz - ($az + $dz * $k));
+}
+
+/**
+ * Crates picked up by driving: every live crate within CRATE_PICK metres (Scavenger: more) of the straight route the tank
+ * just drove. Opens each one for the driver (contents are rolled now, as with a shell claim) and marks it claimed.
+ * Returns [['id', 'by', 'item', 'lost'], ...] in the order they were reached.
+ */
+function crate_pickups(array &$players, array &$objects, int $seat, float $x0, float $z0, float $x1, float $z1): array
+{
+    $r = (float)sk($players[$seat], 'pick', CRATE_PICK); $got = [];
+    $order = [];
+    foreach ($objects as $k => $o) {
+        if ($o['type'] !== 'crate' || $o['state'] !== 'live') continue;
+        if (seg_dist((float)$o['x'], (float)$o['z'], $x0, $z0, $x1, $z1) <= $r) $order[$k] = hypot($o['x'] - $x0, $o['z'] - $z0);
+    }
+    asort($order);
+    foreach (array_keys($order) as $k) $got[] = open_crate($players, $objects[$k], $seat);
+    return $got;
+}
+
+/** $seat opens a crate (by shell or by driving): its contents are rolled now and go into the tank's one slot. */
+function open_crate(array &$players, array &$o, int $seat): array
+{
+    // what's inside is decided only now, so nobody (not even a player reading the network traffic) knows before
+    $pool = item_pool((string)($o['pool'] ?? 'safe'));
+    if (sk($players[$seat], 'dug_in', false)) unset($pool['relocate']);   // Dug In can't use it, so never finds it
+    $o['item'] ??= roll_item($pool) ?? 'repair';
+    $prev = $players[$seat]['item'] ?? null;
+    $players[$seat]['item'] = $o['item'];
+    $o['state'] = 'claimed'; $o['by'] = $seat;
+    return ['id' => $o['id'], 'by' => $seat, 'item' => $o['item'], 'lost' => $prev];
 }
 
 /**
@@ -1058,7 +1322,7 @@ function drive_path(Terrain $t, array $blk, float $x0, float $z0, float $tx, flo
  * Move $seat toward (tx, tz) with $left metres of allowance. Changes $players in place.
  * Returns the replay record for a 'move' event, or ['error' => code].
  */
-function drive_tank(Terrain $t, array &$players, array $objects, int $seat, float $tx, float $tz, float $left): array
+function drive_tank(Terrain $t, array &$players, array &$objects, int $seat, float $tx, float $tz, float $left): array
 {
     $me = &$players[$seat];
     if ($left < DRIVE_MIN) return ['error' => 'no_fuel'];
@@ -1068,7 +1332,10 @@ function drive_tank(Terrain $t, array &$players, array $objects, int $seat, floa
     $ev = ['from' => [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)], 'to' => [$x, $y, $z],
            'path' => array_map('r3', $r['path']), 'used' => round($r['used'], 2), 'stop' => $r['stop']];
     $ev['path'][count($ev['path']) - 1] = [$x, $y, $z];
+    $x0 = (float)$me['x']; $z0 = (float)$me['z'];
     [$me['x'], $me['y'], $me['z']] = [$x, $y, $z];
+    unset($me);
+    if ($got = crate_pickups($players, $objects, $seat, $x0, $z0, $x, $z)) $ev['pickup'] = $got;   // drove over a crate
     return $ev;
 }
 
@@ -1084,11 +1351,11 @@ function item_effect(?Terrain $t, array &$players, array $objects, int $seat, st
     if ($dbl && $dbl['seat'] === $seat && $dbl['shots'] > 0) return ['error' => 'mid_double'];
     switch ($item) {
         case 'repair':
-            if ($me['hp'] >= 100) return ['error' => 'full_hp'];
-            $heal = min(REPAIR_HP, 100 - $me['hp']); $me['hp'] += $heal; $ev['heal'] = $heal;
+            if ($me['hp'] >= max_hp($me)) return ['error' => 'full_hp'];
+            $heal = min(REPAIR_HP, max_hp($me) - $me['hp']); $me['hp'] += $heal; $ev['heal'] = $heal;
             break;
         case 'shield':
-            FX::$e['shields'][$seat] = ['hp' => SHIELD_HP, 'left' => SHIELD_TURNS];
+            FX::$e['shields'][$seat] = ['hp' => SHIELD_HP, 'left' => max(1, SHIELD_TURNS + (int)sk($me, 'item_turns', 0))];   // Scavenger: 1 less
             break;
         case 'weather':
             break;
@@ -1099,7 +1366,12 @@ function item_effect(?Terrain $t, array &$players, array $objects, int $seat, st
         case 'rangefinder':
             if (!in_array($seat, FX::$e['range'], true)) FX::$e['range'][] = $seat;
             break;
+        case 'cloak':
+            if (isset(FX::$e['cloak'][$seat])) return ['error' => 'already_on'];
+            FX::$e['cloak'][$seat] = ['left' => CLOAK_ROUNDS, 'turn' => $turn, 'seen' => [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)]];
+            break;
         case 'relocate':
+            if (sk($me, 'dug_in', false)) return ['error' => 'dug_in'];
             $to = relocate_spot($t, $players, $objects, $seat);
             if (!$to) return ['error' => 'no_spot'];
             $ev['from'] = [round($me['x'], 3), round($me['y'], 3), round($me['z'], 3)]; $ev['to'] = $to;
@@ -1110,4 +1382,40 @@ function item_effect(?Terrain $t, array &$players, array $objects, int $seat, st
             return ['error' => 'not_here'];                     // Flare: night maps only (phase 5)
     }
     return ['event' => $ev, 'ends_turn' => $ends];
+}
+
+/**
+ * Spotter (phase 4): where a shot landed relative to the nearest enemy, along the line from the shooter to that enemy.
+ * $long: metres past (+) or short of (−) the enemy; $right: metres right (+) or left (−) of the line, seen from the
+ * shooter. A Cluster shell counts where its bomblets landed on average. Null if it left the map or no enemy is left.
+ */
+/** Is $seat invisible right now? */
+function cloaked(int $seat): bool { return isset(FX::$e['cloak'][$seat]); }
+
+/** The tank fires: invisibility ends. Returns where it is (for everyone's replay), or null if it wasn't hidden. */
+function cloak_reveal(array $players, int $seat): ?array
+{
+    if (!cloaked($seat)) return null;
+    unset(FX::$e['cloak'][$seat]);
+    return [round($players[$seat]['x'], 3), round($players[$seat]['y'], 3), round($players[$seat]['z'], 3)];
+}
+
+function spot_report(array $players, int $seat, array $res, array $enemies): ?array
+{
+    $booms = [];
+    foreach ($res['projectiles'] as $pr) if ($pr['boom']) $booms[] = $pr['boom'];
+    if (!$booms || !$enemies) return null;
+    $first = $res['projectiles'][0]['boom'] ?? null;
+    $L = $first ? [$first['x'], $first['z']]
+        : [array_sum(array_column($booms, 'x')) / count($booms), array_sum(array_column($booms, 'z')) / count($booms)];
+    $me = $players[$seat]; $best = null;
+    foreach ($enemies as $s) {
+        $e = $players[$s]; $d = hypot($e['x'] - $L[0], $e['z'] - $L[1]);
+        if (!$best || $d < $best[1]) $best = [$s, $d];
+    }
+    $e = $players[$best[0]];
+    $dx = $e['x'] - $me['x']; $dz = $e['z'] - $me['z']; $D = hypot($dx, $dz) ?: 1.0;
+    $ux = $dx / $D; $uz = $dz / $D;                                   // forward; right is (−uz, ux)
+    $lx = $L[0] - $me['x']; $lz = $L[1] - $me['z'];
+    return ['seat' => $best[0], 'long' => round($lx * $ux + $lz * $uz - $D, 1), 'right' => round(-$lx * $uz + $lz * $ux, 1), 'miss' => round($best[1], 1)];
 }

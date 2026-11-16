@@ -66,7 +66,7 @@ function ai_solve(Terrain $t, array $players, array $objects, int $seat, array $
     foreach ([32.0, 45.0, 58.0, 72.0] as $elev) {
         $yaw = $base;
         for ($it = 0; $it < 3; $it++) {
-            $lo = 10.0; $hi = 100.0; $L = null; $pw = 55.0;
+            $lo = 10.0; $hi = max_power($me); $L = null; $pw = 55.0;   // Fortified tops out at 85
             for ($k = 0; $k < 9; $k++) {
                 $pw = ($lo + $hi) / 2;
                 $L = ai_trace($t, $players, $objects, $seat, $yaw, $elev, $pw, $wind, $rules);
@@ -101,6 +101,12 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
     $me = $players[$seat];
     $inFire = fn(float $x, float $z) => (bool)array_filter($fx['fires'] ?? [], fn($f) => hypot($x - $f['x'], $z - $f['z']) < $f['r'] + 1.5);
     $burning = $inFire($me['x'], $me['z']);
+    // paired drops: head for this tank's own crate (picked up by driving over it), unless it's sitting in a fire
+    if (!$burning) foreach ($objects as $o) {
+        if ($o['type'] !== 'crate' || $o['state'] !== 'live' || (int)($o['for'] ?? -1) !== $seat) continue;
+        if ($inFire($o['x'], $o['z'])) continue;
+        return [(float)$o['x'], (float)$o['z']];
+    }
     if (!$burning && !($wasHit && rnd() < $L['dodge'])) return null;
     $foes = array_filter($players, fn($p) => $p['alive'] && $p['seat'] !== $seat);
     $near = fn(float $x, float $z) => min(array_map(fn($p) => hypot($p['x'] - $x, $p['z'] - $z), $foes) ?: [0.0]);
@@ -125,14 +131,22 @@ function ai_drive_plan(Terrain $t, array $players, array $objects, int $seat, fl
 function ai_decide(Terrain $t, array $players, array $objects, int $seat, array $wind, array $rules, string $level, array $fx, ?array $drive = null): array
 {
     $me = $players[$seat]; $L = AI_LEVELS[$level] ?? AI_LEVELS['veteran']; $item = $me['item'] ?? null;
+    // an invisible enemy: the AI knows only where it vanished, like a player would
+    foreach ($fx['cloak'] ?? [] as $s => $c) if ((int)$s !== $seat && isset($players[(int)$s])) [$players[(int)$s]['x'], $players[(int)$s]['y'], $players[(int)$s]['z']] = $c['seen'];
+    $mine = $fx['cloak'][$seat] ?? null;
+    // its own Invisibility: vanish first, then drive away unseen and hold fire that turn; next turn it fires (and shows)
+    if ($item === 'cloak' && !$mine && $me['hp'] <= 60 && !($fx['double']['shots'] ?? 0)) return ['use' => true];
+    if ($mine && $drive) { $drive['hit'] = true; $L['dodge'] = 1.0; }   // hidden: always slip away
     if ($drive && ($to = ai_drive_plan($t, $players, $objects, $seat, $drive['left'], $drive['hit'], $fx, $L))) return ['move' => $to];
+    if ($mine && (int)$mine['turn'] === (int)($fx['turn'] ?? -1)) return ['hold' => true];
     $kind = $item ? (POWERUPS[$item]['kind'] ?? '') : '';
     $midDouble = $fx['double'] && $fx['double']['seat'] === $seat && $fx['double']['shots'] > 0;
     if ($item && !$midDouble && $kind !== 'shell') {
         $use = match ($item) {
             'repair' => $me['hp'] <= 70,
             'shield' => $me['hp'] <= 85 || rnd() < .5,
-            'relocate' => $me['hp'] <= 35 && rnd() < .7,
+            'relocate' => $me['hp'] <= 35 && rnd() < .7 && !sk($me, 'dug_in', false),
+            'cloak' => false,                                   // used above, when it's hurt
             'flare' => false,
             default => true,                                    // weather, double, rangefinder: use straight away
         };
@@ -142,7 +156,8 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
     usort($foes, fn($a, $b) => (hypot($a['x'] - $me['x'], $a['z'] - $me['z']) + $a['hp'] * .6) <=> (hypot($b['x'] - $me['x'], $b['z'] - $me['z']) + $b['hp'] * .6));
     $foe = $foes[0];
     $T = [$foe['x'], $foe['y'] + 1, $foe['z']]; $target = 'tank'; $wk = 'shell';
-    $crates = array_values(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live'));
+    // its own paired crate it drives to; others' crates it may shoot to steal or deny them
+    $crates = array_values(array_filter($objects, fn($o) => $o['type'] === 'crate' && $o['state'] === 'live' && (int)($o['for'] ?? -1) !== $seat));
     $foeD = hypot($foe['x'] - $me['x'], $foe['z'] - $me['z']);
     if ($crates && !$item && rnd() < $L['crate']) {
         usort($crates, fn($a, $b) => hypot($a['x'] - $me['x'], $a['z'] - $me['z']) <=> hypot($b['x'] - $me['x'], $b['z'] - $me['z']));
@@ -162,9 +177,10 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
         }
     }
     [$yaw, $elev, $pw] = ai_solve($t, $players, $objects, $seat, $T, $wind, $rules);
-    $s = $L['err'];
+    // information skills (Sharpshooter's long arc, Spotter's readout) help a human aim; the AI stands in for that with less error
+    $s = $L['err'] * (float)sk($me, 'ai_aim', 1.0);
     return ['yaw' => fmod(fmod($yaw + ai_randn() * $s, 360) + 360, 360), 'elev' => min(85.0, max(5.0, $elev + ai_randn() * $s * .5)),
-            'power' => min(100.0, max(10.0, $pw + ai_randn() * $s * .7)), 'weapon' => $wk, 'target' => $target];
+            'power' => min(max_power($me), max(10.0, $pw + ai_randn() * $s * .7)), 'weapon' => $wk, 'target' => $target];
 }
 
 /* =====================================================================
@@ -274,8 +290,8 @@ function ai_act(int $mid, ?int $shown = null): void
         $players = load_players($mid);
         $t = Terrain::unpack($row['terrain'], $rules['water']);
         $objects = json_decode((string)$row['objects'], true) ?: [];
-        $fx = (json_decode((string)$row['effects'], true) ?: []) + ['double' => null, 'moved' => null, 'fires' => []];
-        $turn = (int)$m['turn_no'];
+        $fx = (json_decode((string)$row['effects'], true) ?: []) + ['double' => null, 'moved' => null, 'fires' => [], 'cloak' => []];
+        $turn = (int)$m['turn_no']; $fx['turn'] = $turn;
         // drive at most once a turn, before anything else; "hit" = damaged by anything since this tank's own last action
         $drive = null;
         $mv = $fx['moved'];
@@ -289,6 +305,8 @@ function ai_act(int $mid, ?int $shown = null): void
             if (!isset($r['error'])) return;
             $plan = ai_decide($t, $players, $objects, $seat, wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], $fx);
         }
+        if (!empty($plan['hold'])) { $r = hold_fire($mid, $uid, ['turn_no' => $turn]); if (!isset($r['error'])) return;
+            $plan = ai_decide($t, $players, $objects, $seat, wind_vec((float)$row['wind_ang'], (float)$row['wind_spd']), $rules, (string)$rules['bots'][$seat], array_replace($fx, ['cloak' => []])); }
         if (!empty($plan['use'])) {
             $r = use_item($mid, $uid, ['turn_no' => $turn]);
             if (isset($r['error'])) $plan = ai_decide($t, array_replace($players, [$seat => ['item' => null] + $players[$seat]]), $objects, $seat,

@@ -6,6 +6,18 @@ require_once __DIR__ . '/names.php';
  * Brings an existing install's tables up to date, so an upgrade is just "upload the new files".
  * The check is two zero-row queries per request; the ALTERs run once, under a lock.
  */
+/** The 'hold' event type (Invisibility's Hold fire). Checked on upgrade, and before a Hold fire in case an install
+ * took the cosmetics columns without it. Runs outside any transaction (an ALTER would end one). */
+function ensure_hold_event(): void
+{
+    static $ok = false;
+    if ($ok) return;
+    $col = db()->query('SHOW COLUMNS FROM ' . T('match_events') . " LIKE 'type'")->fetch();
+    if ($col && strpos((string)$col['Type'], "'hold'") === false)
+        db()->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move','hold') NOT NULL");
+    $ok = true;
+}
+
 function ensure_schema(): void
 {
     static $done = false;
@@ -19,6 +31,9 @@ function ensure_schema(): void
               'ai' => 'SELECT is_bot FROM ' . T('users') . ' LIMIT 0',
               'errors' => 'SELECT id FROM ' . T('errors') . ' LIMIT 0',
               'drive' => 'SELECT moved FROM ' . T('match_players') . ' LIMIT 0',
+              'skills' => 'SELECT u.xp, u.level, u.loadout, u.first_win_on, p.loadout, p.xp, p.xp_detail FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
+              'bans' => 'SELECT banned_until, ban_reason, banned_by FROM ' . T('users') . ' LIMIT 0',
+              'cosmetics' => 'SELECT u.cosmetics, p.cosmetics FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
              ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
@@ -72,6 +87,31 @@ function ensure_schema(): void
         if (in_array('drive', $need, true)) {                    // phase 3: driving
             if (!in_array('moved', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN moved FLOAT NOT NULL DEFAULT 0 AFTER kills');
             $pdo->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move') NOT NULL");
+        }
+        if (in_array('cosmetics', $need, true)) {                // paint, barrels, trails, blasts, titles
+            if (!in_array('cosmetics', $cols('users'), true)) $pdo->exec('ALTER TABLE ' . T('users') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
+            if (!in_array('cosmetics', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN cosmetics VARCHAR(255) NULL');
+            ensure_hold_event();                                 // and Hold fire (Invisibility), from the same release
+        }
+        if (in_array('bans', $need, true)) {                     // admins can ban or pause players
+            $have = $cols('users'); $add = [];
+            if (!in_array('banned_until', $have, true)) $add[] = 'ADD COLUMN banned_until DATETIME NULL';
+            if (!in_array('ban_reason', $have, true))   $add[] = 'ADD COLUMN ban_reason VARCHAR(200) NULL';
+            if (!in_array('banned_by', $have, true))    $add[] = 'ADD COLUMN banned_by VARCHAR(40) NULL';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('users') . ' ' . implode(', ', $add));
+        }
+        if (in_array('skills', $need, true)) {                   // phase 4: XP, levels and loadouts
+            $have = $cols('users'); $add = [];
+            if (!in_array('xp', $have, true))           $add[] = 'ADD COLUMN xp INT UNSIGNED NOT NULL DEFAULT 0 AFTER wins';
+            if (!in_array('level', $have, true))        $add[] = 'ADD COLUMN level TINYINT UNSIGNED NOT NULL DEFAULT 1 AFTER xp';
+            if (!in_array('loadout', $have, true))      $add[] = 'ADD COLUMN loadout VARCHAR(255) NULL AFTER level';
+            if (!in_array('first_win_on', $have, true)) $add[] = 'ADD COLUMN first_win_on DATE NULL AFTER loadout';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('users') . ' ' . implode(', ', $add));
+            $have = $cols('match_players'); $add = [];
+            if (!in_array('loadout', $have, true))   $add[] = 'ADD COLUMN loadout VARCHAR(255) NULL AFTER item';
+            if (!in_array('xp', $have, true))        $add[] = 'ADD COLUMN xp INT NULL AFTER rating_after';
+            if (!in_array('xp_detail', $have, true)) $add[] = 'ADD COLUMN xp_detail TEXT NULL AFTER xp';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ' . implode(', ', $add));
         }
     } finally {
         $pdo->query("SELECT RELEASE_LOCK($lock)");
