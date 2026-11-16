@@ -125,3 +125,27 @@ main.narrow{max-width:560px;margin:24px auto;padding:0 16px}
 .warn{color:var(--accent);font-weight:700}
 .admin-link{color:var(--accent);font-weight:700;text-decoration:none}
 @media (max-width:640px){.admin-stats{grid-template-columns:repeat(2,1fr)}.admin{padding:0 10px}}
+
+/* ---- phase 4: level, XP and loadouts ---- */
+.level-line{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.level-line b{font:400 14px 'Black Ops One';letter-spacing:.12em;color:var(--accent)}
+.xpbar{display:inline-block;width:120px;height:8px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden;vertical-align:middle}
+.xpbar i{display:block;height:100%;background:linear-gradient(90deg,#c98d14,var(--accent));border-radius:4px}
+.lo-head{display:flex;justify-content:space-between;align-items:baseline}
+.lo-summary{line-height:1.5}
+.lo-summary b{color:var(--ink)}
+.lo-ranked{margin-top:4px}
+.lo-label{font:400 13px 'Black Ops One';letter-spacing:.08em;margin:14px 0 6px}
+.lo-sub{font:400 11px 'Black Ops One';letter-spacing:.1em;color:var(--dim);margin:10px 0 6px}
+.lo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.lo-card{text-align:left;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:9px;padding:8px 10px;color:var(--ink);cursor:pointer;font:500 14px/1.3 Rajdhani;min-height:44px}
+.lo-card:hover{border-color:rgba(240,180,41,.5)}
+.lo-card.on{border-color:var(--accent);background:rgba(240,180,41,.12);box-shadow:inset 0 0 0 1px var(--accent)}
+.lo-card.locked{opacity:.45;cursor:not-allowed}
+.lo-name{font:700 16px Rajdhani;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.lo-name i{font-style:normal;color:var(--accent);width:16px;text-align:center}
+.lo-name small{margin-left:auto;font:400 10px 'Black Ops One';letter-spacing:.08em;color:var(--dim);border:1px solid var(--line);border-radius:10px;padding:1px 6px}
+.lo-desc{font-size:13px;color:var(--dim)}
+.lo-desc .gain{color:var(--ok);font-weight:700} .lo-desc .cost{color:#ff9a9a;font-weight:700}
+#loRanked{margin-top:0}
+@media (max-width:400px){.lo-grid{grid-template-columns:minmax(0,1fr)}}

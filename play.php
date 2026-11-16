@@ -22,7 +22,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/game.css?v=5">
+<link rel="stylesheet" href="assets/game.css?v=7">
 </head>
 <body>
 <div id="game" data-match="<?= $mid ?>" data-csrf="<?= h(csrf_token()) ?>" data-user="<?= (int)$u['id'] ?>"></div>
@@ -45,6 +45,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
   <div id="who"><span id="whoName">…</span><span class="tag" id="whoTag"></span><span id="timer"></span>
     <button id="drawerBtn" type="button" aria-expanded="true" aria-controls="sliders" aria-label="Show or hide the aiming controls"><i></i></button></div>
   <div id="weps" class="ctl"></div>
+  <div id="shotCards" class="ctl" hidden aria-label="Your last shots: tap one to aim like that again"></div>
   <div id="sliders" class="ctl">
     <label for="sYaw">TURRET</label><button class="step" data-k="yaw" data-d="-1" aria-label="Turret left">−</button><input type="range" id="sYaw" min="0" max="359" step="1"><button class="step" data-k="yaw" data-d="1" aria-label="Turret right">+</button><output id="oYaw">0°</output>
     <label for="sElev">ANGLE</label><button class="step" data-k="elev" data-d="-1" aria-label="Lower angle">−</button><input type="range" id="sElev" min="5" max="85" step="0.5"><button class="step" data-k="elev" data-d="1" aria-label="Raise angle">+</button><output id="oElev">45°</output>
@@ -66,6 +67,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <div class="ov" id="ovEnd"><div class="card panel">
   <h2 id="eTitle">Battle over</h2>
   <table class="st" id="eTable"></table>
+  <div id="eXp"></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap">
     <a class="big" href="lobby.php">BACK TO LOBBY</a>
     <button class="big alt" id="bStay">VIEW BATTLEFIELD</button>
@@ -74,6 +76,6 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 
 <script src="assets/vendor/three.min.js"></script>
 <script src="assets/terrain.js?v=4"></script>
-<script src="assets/game.js?v=10"></script>
+<script src="assets/game.js?v=12"></script>
 </body>
 </html>

@@ -13,8 +13,11 @@ $top = db()->query('SELECT id, username, alias, rating, games_played, wins FROM 
 $pos = db()->prepare('SELECT COUNT(*) + 1 FROM ' . T('users') . ' WHERE is_bot = 0 AND (rating > ? OR (rating = ? AND (wins > ? OR (wins = ? AND id < ?))))');
 $pos->execute([$u['rating'], $u['rating'], $u['wins'], $u['wins'], $u['id']]);
 $myPos = (int)$pos->fetchColumn();
+$xpRow = db()->prepare('SELECT xp FROM ' . T('users') . ' WHERE id = ?');
+$xpRow->execute([$u['id']]);
+[$level, $xpInto, $xpNeed] = level_info((int)$xpRow->fetchColumn());
 
-$recent = db()->prepare('SELECT m.id, m.mode, m.game_mode, m.map_id, m.finished_at, p.placement, p.rating_before, p.rating_after, p.kills, p.damage_dealt
+$recent = db()->prepare('SELECT m.id, m.mode, m.game_mode, m.map_id, m.finished_at, p.placement, p.rating_before, p.rating_after, p.kills, p.damage_dealt, p.xp
     FROM ' . T('match_players') . ' p JOIN ' . T('matches') . ' m ON m.id = p.match_id
     WHERE p.user_id = ? AND m.status = \'finished\' ORDER BY m.id DESC LIMIT 8');
 $recent->execute([$u['id']]);
@@ -32,6 +35,11 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       <p class="err">Your username can't be shown to other players, so you appear as <?= h($u['name']) ?>. <a href="account.php">Choose a name</a></p>
       <?php endif; ?>
       <a class="small" href="account.php">Change name</a>
+      <div class="level-line" title="Levels unlock skills. Every finished match earns XP; rating is separate and only changes in ranked.">
+        <b>LEVEL <?= $level ?></b>
+        <span class="xpbar"><i style="width:<?= $xpNeed ? round(100 * $xpInto / $xpNeed) : 100 ?>%"></i></span>
+        <span class="muted small"><?= $xpNeed ? $xpInto . ' / ' . $xpNeed . ' XP' : 'Top level' ?></span>
+      </div>
       <div class="stats">
         <div><b><?= (int)$u['rating'] ?></b><span>Rating</span></div>
         <div><b>#<?= $myPos ?></b><span>Rank</span></div>
@@ -47,6 +55,26 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       <a class="btn" href="play.php?id=<?= $active ?>">Rejoin match</a>
     </div>
     <?php endif; ?>
+
+    <div class="panel card" id="loadout">
+      <div class="lo-head"><h2>Loadout</h2><button class="link" id="loEdit" type="button" aria-expanded="false">Change</button></div>
+      <div id="loSummary" class="lo-summary muted small">Loading…</div>
+      <div id="loPicker" hidden>
+        <div class="lo-label">Presets <span class="muted small">balanced, open to everyone</span></div>
+        <div class="lo-grid" id="loPresets"></div>
+        <div class="lo-label">Custom build <span class="muted small" id="loCustomNote"></span></div>
+        <div class="lo-sub">Doctrine <span class="muted small">pick 1</span></div>
+        <div class="lo-grid" id="loDoctrines"></div>
+        <div class="lo-sub">Perks <span class="muted small">pick up to 2</span></div>
+        <div class="lo-grid" id="loPerks"></div>
+        <div id="loRankedBox" hidden>
+          <div class="lo-label">In ranked <span class="muted small" id="loRankedNote"></span></div>
+          <div class="seg" id="loRanked"></div>
+        </div>
+        <p class="err" id="loErr" hidden></p>
+        <div class="room-btns"><button class="btn" id="loSave" type="button">Save loadout</button><button class="btn ghost" id="loCancel" type="button">Cancel</button></div>
+      </div>
+    </div>
 
     <div class="panel card" id="mm">
       <div class="tabs" role="tablist">
@@ -156,7 +184,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
       <h2>Your recent matches</h2>
       <?php if (!$recent): ?><p class="muted">No matches yet.</p><?php else: ?>
       <table class="tbl">
-        <thead><tr><th>Match</th><th>Map</th><th>Place</th><th class="r">Kills</th><th class="r">Damage</th><th class="r">Rating</th></tr></thead>
+        <thead><tr><th>Match</th><th>Map</th><th>Place</th><th class="r">Kills</th><th class="r">Damage</th><th class="r">XP</th><th class="r">Rating</th></tr></thead>
         <tbody>
         <?php foreach ($recent as $r): $d = (int)$r['rating_after'] - (int)$r['rating_before']; $rated = ($r['game_mode'] ?? 'ranked') === 'ranked'; ?>
           <tr>
@@ -164,6 +192,7 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
             <td><?= h(MAPS[$r['map_id'] ?? 'highlands']['name'] ?? 'Highlands') ?></td>
             <td><?= $r['placement'] === null ? '<span class="muted small">ended</span>' : $ord((int)$r['placement']) ?></td>
             <td class="r"><?= (int)$r['kills'] ?></td><td class="r"><?= (int)$r['damage_dealt'] ?></td>
+            <td class="r"><?= $r['xp'] === null ? '<span class="muted">–</span>' : '+' . (int)$r['xp'] ?></td>
             <?php if ($rated): ?><td class="r <?= $d >= 0 ? 'up' : 'down' ?>"><?= $d >= 0 ? '+' : '' ?><?= $d ?></td><?php else: ?><td class="r muted">–</td><?php endif; ?>
           </tr>
         <?php endforeach; ?>
@@ -173,5 +202,5 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
     </div>
   </section>
 </main>
-<script src="assets/lobby.js?v=4"></script>
+<script src="assets/lobby.js?v=5"></script>
 <?php page_foot();

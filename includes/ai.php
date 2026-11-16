@@ -66,7 +66,7 @@ function ai_solve(Terrain $t, array $players, array $objects, int $seat, array $
     foreach ([32.0, 45.0, 58.0, 72.0] as $elev) {
         $yaw = $base;
         for ($it = 0; $it < 3; $it++) {
-            $lo = 10.0; $hi = 100.0; $L = null; $pw = 55.0;
+            $lo = 10.0; $hi = max_power($me); $L = null; $pw = 55.0;   // Fortified tops out at 85
             for ($k = 0; $k < 9; $k++) {
                 $pw = ($lo + $hi) / 2;
                 $L = ai_trace($t, $players, $objects, $seat, $yaw, $elev, $pw, $wind, $rules);
@@ -132,7 +132,7 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
         $use = match ($item) {
             'repair' => $me['hp'] <= 70,
             'shield' => $me['hp'] <= 85 || rnd() < .5,
-            'relocate' => $me['hp'] <= 35 && rnd() < .7,
+            'relocate' => $me['hp'] <= 35 && rnd() < .7 && !sk($me, 'dug_in', false),
             'flare' => false,
             default => true,                                    // weather, double, rangefinder: use straight away
         };
@@ -162,9 +162,10 @@ function ai_decide(Terrain $t, array $players, array $objects, int $seat, array 
         }
     }
     [$yaw, $elev, $pw] = ai_solve($t, $players, $objects, $seat, $T, $wind, $rules);
-    $s = $L['err'];
+    // information skills (Sharpshooter's long arc, Spotter's readout) help a human aim; the AI stands in for that with less error
+    $s = $L['err'] * (float)sk($me, 'ai_aim', 1.0);
     return ['yaw' => fmod(fmod($yaw + ai_randn() * $s, 360) + 360, 360), 'elev' => min(85.0, max(5.0, $elev + ai_randn() * $s * .5)),
-            'power' => min(100.0, max(10.0, $pw + ai_randn() * $s * .7)), 'weapon' => $wk, 'target' => $target];
+            'power' => min(max_power($me), max(10.0, $pw + ai_randn() * $s * .7)), 'weapon' => $wk, 'target' => $target];
 }
 
 /* =====================================================================

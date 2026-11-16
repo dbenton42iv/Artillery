@@ -19,6 +19,7 @@ function ensure_schema(): void
               'ai' => 'SELECT is_bot FROM ' . T('users') . ' LIMIT 0',
               'errors' => 'SELECT id FROM ' . T('errors') . ' LIMIT 0',
               'drive' => 'SELECT moved FROM ' . T('match_players') . ' LIMIT 0',
+              'skills' => 'SELECT u.xp, u.level, u.loadout, u.first_win_on, p.loadout, p.xp, p.xp_detail FROM ' . T('users') . ' u, ' . T('match_players') . ' p LIMIT 0',
              ] as $k => $probe) {
         try { db()->query($probe); } catch (PDOException $e) { $need[] = $k; }
     }
@@ -72,6 +73,19 @@ function ensure_schema(): void
         if (in_array('drive', $need, true)) {                    // phase 3: driving
             if (!in_array('moved', $cols('match_players'), true)) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ADD COLUMN moved FLOAT NOT NULL DEFAULT 0 AFTER kills');
             $pdo->exec('ALTER TABLE ' . T('match_events') . " MODIFY type ENUM('shot','skip','forfeit','turn','item','move') NOT NULL");
+        }
+        if (in_array('skills', $need, true)) {                   // phase 4: XP, levels and loadouts
+            $have = $cols('users'); $add = [];
+            if (!in_array('xp', $have, true))           $add[] = 'ADD COLUMN xp INT UNSIGNED NOT NULL DEFAULT 0 AFTER wins';
+            if (!in_array('level', $have, true))        $add[] = 'ADD COLUMN level TINYINT UNSIGNED NOT NULL DEFAULT 1 AFTER xp';
+            if (!in_array('loadout', $have, true))      $add[] = 'ADD COLUMN loadout VARCHAR(255) NULL AFTER level';
+            if (!in_array('first_win_on', $have, true)) $add[] = 'ADD COLUMN first_win_on DATE NULL AFTER loadout';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('users') . ' ' . implode(', ', $add));
+            $have = $cols('match_players'); $add = [];
+            if (!in_array('loadout', $have, true))   $add[] = 'ADD COLUMN loadout VARCHAR(255) NULL AFTER item';
+            if (!in_array('xp', $have, true))        $add[] = 'ADD COLUMN xp INT NULL AFTER rating_after';
+            if (!in_array('xp_detail', $have, true)) $add[] = 'ADD COLUMN xp_detail TEXT NULL AFTER xp';
+            if ($add) $pdo->exec('ALTER TABLE ' . T('match_players') . ' ' . implode(', ', $add));
         }
     } finally {
         $pdo->query("SELECT RELEASE_LOCK($lock)");

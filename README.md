@@ -62,6 +62,10 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   Heavy (×3) or Cluster (×2), and fire. When your turn comes round, the path of your own last shot is shown
   (not the opponent's that just landed), so you can adjust from it. Wind shifts every turn, craters reshape the ground, and tanks
   that lose the ground under them fall and take damage. Last tank standing wins.
+- **Shot cards:** under the aiming controls, cards show your own last 3 shots: the turn, weapon, turret, angle and power,
+  the wind then (as an arrow relative to that aim: ↑ with the shot, ← pushing it left) and what happened (a hit, a crate,
+  the Spotter's range report, or a miss). Tap one on your turn to put your aim back exactly there, e.g. after a turn spent
+  shooting at a crate. They are kept in the browser for that match, so they survive a reload.
 - **Driving:** on your turn, before you fire, you can drive up to 10 m (`move_per_turn`), in one hop or several.
   Press **Drive** (or **G**): a ring shows how far you can go. With a mouse, hover to see the route and click to
   go; on a phone or tablet, tap the ground to see the route, then press **DRIVE**. The tank goes in a straight
@@ -136,6 +140,39 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   *Aim* pad lets you hold and drag to aim (sideways turns the turret, up/down sets the angle).
 - **Ratings:** ranked only (Casual, Private and vs AI never change rating, wins or matches played). Multiplayer Elo. Every pair of players counts as a head-to-head result based on
   finishing order (survivor first, then by how long each tank lasted).
+- **Loadouts:** before a match, every player brings a loadout: **1 doctrine** and up to **2 perks**, set under
+  *Loadout* in the lobby. Every skill has a cost, so a loadout changes how you play without making the tank stronger
+  overall. Everyone sees everyone's loadout on the battle's intro screen and as icons on the scoreboard.
+
+  | Doctrine | Gain | Cost | Level |
+  |---|---|---|---|
+  | Standard Issue | Heavy ×3, Cluster ×2 | none | 1 |
+  | Heavy Gunner | Heavy ×4 | no Cluster rounds; your Heavy shells do 65 damage, not 70 | 3 |
+  | Demolitions | craters 30% wider; fall damage you cause counts double | blast damage −10% | 5 |
+  | Sharpshooter | aim arc twice as long | Heavy ×2, Cluster ×1 | 7 |
+  | Fortified | start at 105 hp | max power 85 (shorter range) | 9 |
+  | Meteorologist | see the wind of your own next turn | every shell −2 damage | 12 |
+
+  | Perk | Gain | Cost | Level |
+  |---|---|---|---|
+  | Reinforced Tracks | fall damage on you halved | −5 starting hp | 2 |
+  | Quick Loader | +10 s on your shot clock | none (clock only) | 2 |
+  | Scavenger | claim crates from 6 m instead of 4 | your power-ups last 1 turn less (Shield, Napalm, Weather Report) | 4 |
+  | Spotter | after each shot: how far it landed from the nearest enemy ("12 m short · 3 m left") | enemies see SPOTTING by your name | 6 |
+  | Low Profile | smaller target: hit radius 2.1 m instead of 2.4 | −4 starting hp | 8 |
+  | Bomblet Pack | Cluster splits into 7 bomblets instead of 5 | each bomblet −5 damage | 10 |
+  | Dug In | blasts within 3 m of you do 10% less | can't use Relocate (and never finds it in a crate) | 14 |
+
+  **Presets**, open to everyone in every mode: *Rifleman* (Standard Issue, Quick Loader, Reinforced Tracks), *Gunner*
+  (Heavy Gunner, Quick Loader, Scavenger), *Sapper* (Demolitions, Reinforced Tracks, Scavenger). A custom build may only
+  use skills you've unlocked. **Below level 14, ranked matches always use a preset** (you choose which), so new
+  players never face builds they can't have yet; from level 14 every skill is unlocked and ranked takes custom builds.
+  The server checks the loadout when the match starts and records it with the match.
+- **XP and levels:** every finished match earns XP in every mode (rating stays ranked-only): 50 for finishing,
+  2 per 10 damage dealt, 25 per kill, 50 for a win and 100 for your first win of the day. Leaving or being removed
+  for missed turns loses the finishing and win XP. Level *n* needs 50 + 25×*n* XP to reach the next (levels run to 50;
+  level 14, every skill, takes about 22 matches). The lobby shows your level and progress; the end of each battle shows
+  what it earned and any skills a new level unlocked. Computer players earn nothing; a match the admin ends earns nothing.
 - **Missed turns:** if your clock runs out, your turn is skipped. Three missed turns in a row and you
   are removed from the match. The *Leave* button forfeits the match.
 - **Practice:** `practice.html` is the offline version (hot-seat and CPU opponents, no rating).
@@ -164,7 +201,9 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   (in `includes/items.php`) can be tuned against real win rates.
 - **Upgrading** from an earlier version: upload the new files. The first request adds the new columns and tables
   (`matches.game_mode`, `effects`; `match_players.item`; `queue.kind`, `map_pref`; `users.is_bot`; `rooms`,
-  `room_members`, `item_log`; phase 3: `match_players.moved` and the `move` event type) by itself. Matches already
+  `room_members`, `item_log`; phase 3: `match_players.moved` and the `move` event type; phase 4: `users.xp`, `level`,
+  `loadout`, `first_win_on` and `match_players.loadout`, `xp`, `xp_detail`) by itself. Matches from before phase 4
+  finish without loadouts (100 hp, standard kit), and pay XP when they finish. Matches already
   in progress finish under the rules they started with (no crates); they do get driving, at the site's setting.
   If your host caches PHP (OPcache), the new files may take a few seconds to be picked up.
 
@@ -178,6 +217,10 @@ with no move, or a minute with nobody online), the queue, open rooms and the lat
 - **Clear the queue**, **Close open rooms**.
 - **Reload code**: clears PHP's OPcache, so newly uploaded files are used straight away.
 - **Restart everything**: all of the above at once.
+
+The page also lists **Loadouts in ranked**: how often each loadout wins finished ranked matches, so a build that wins
+too often (more than 55% in 1 v 1, or 1.1× its fair share with more tanks, over 30+ matches) stands out. The skill
+numbers live in `includes/skills.php`.
 
 ## When something goes wrong
 - **The battle page never freezes.** If the connection drops, a *Connection lost. Reconnecting…* bar appears
@@ -225,15 +268,23 @@ api/clientlog.php    → a browser reports a script error (stored in art_errors)
 api/match.php        → match state and new events (polled)
 api/shot.php         → fire (server simulates the shot)
 api/move.php         → drive before you fire (server plans the route; doesn't end the turn)
-admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart")
+admin.php            → admin page: end stuck matches, clear the queue, close rooms, reload code ("restart");
+                       how often each loadout wins ranked matches
 api/forfeit.php      → leave a match
+api/loadout.php      → your level, XP and loadout; save a loadout (presets, or a custom build of unlocked skills)
 includes/            → config, database, game engine, map recipes, power-ups (items.php), private rooms
-                       (rooms.php), computer players (ai.php), matchmaking (web access blocked)
+                       (rooms.php), computer players (ai.php), skills, loadouts, XP and levels (skills.php),
+                       matchmaking (web access blocked)
 tests/               → php tests/names_test.php (name filter)
                        php tests/sim_matches.php > /tmp/s.json && node tests/replay_parity.js /tmp/s.json   (replays match the server;
                          the browser's drive preview plans exactly the route the server drives)
                        php tests/crate_gate.php /tmp/s.json   (crates land in the circle between the tanks)
                        php tests/ai_bench.php [--no-drive]    (computer players: speed, accuracy and driving by skill)
+                       php tests/sim_matches.php 1 44 1 --skills > /tmp/k.json && node tests/replay_parity.js /tmp/k.json
+                         (the same replay check with every tank on a random loadout)
+                       php tests/loadout_bench.php pop 3000 1 > /tmp/b.jsonl && php tests/loadout_report.php /tmp/b.jsonl
+                         (phase 4 gate: AI vs AI to ranked rules, win rate of every doctrine, perk, preset and build;
+                          add -d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=128M to run ~3× faster)
 assets/              → CSS, JS, and a bundled copy of three.js (no CDN needed)
 sql/schema.sql       → schema for manual install
 ```

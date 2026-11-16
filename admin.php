@@ -95,6 +95,23 @@ page_head('Admin', 'lobby'); topbar($u); ?>
   </section>
 
   <section class="panel card">
+    <h2>Loadouts in ranked</h2>
+    <?php $los = admin_loadout_stats(); ?>
+    <p class="muted small">How often each loadout wins finished ranked matches (a draw counts half). In 1 v 1 an average build wins 50%;
+      with more tanks, "vs fair share" compares its wins with 1 in 3 or 1 in 4. The phase 4 gate is that no loadout wins more than 55%.
+      Builds with fewer than 30 matches are too few to judge.</p>
+    <?php if (!$los): ?><p class="muted">No finished ranked matches with loadouts yet.</p><?php else: ?>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Loadout</th><th class="r">Matches</th><th class="r">Wins</th><th class="r">Win rate</th><th class="r">vs fair share</th></tr></thead>
+      <tbody><?php foreach (array_slice($los, 0, 20) as $l): $hot = $l['n'] >= 30 && $l['share'] > 1.1; ?>
+        <tr<?= $hot ? ' class="stuck"' : '' ?>><td><?= h($l['name']) ?></td><td class="r"><?= $l['n'] ?></td><td class="r"><?= rtrim(rtrim(number_format($l['w'], 1), '0'), '.') ?></td>
+          <td class="r"><?= round(100 * $l['rate']) ?>%</td><td class="r"><?= sprintf('%.2f×', $l['share']) ?><?= $hot ? ' <span class="warn">wins too often?</span>' : '' ?></td></tr>
+      <?php endforeach; ?></tbody>
+    </table></div>
+    <?php endif; ?>
+  </section>
+
+  <section class="panel card">
     <h2>Recent problems</h2>
     <?php if (!$st['errors']): ?><p class="muted">None logged.</p><?php else: ?>
     <div class="tbl-wrap"><table class="tbl">

@@ -750,8 +750,29 @@ function decodeTerrain(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Float32Array(bytes.buffer);
 }
+/* ---------- skills (phase 4): loadouts are public, and a few change what this page shows ---------- */
+let SKILLS = { doctrines: {}, perks: {}, presets: {} };
+const maxHp = P => P && P.max_hp ? P.max_hp : 100;
+const hpPct = P => Math.max(0, Math.min(100, 100 * P.hp / maxHp(P)));
+const maxPow = () => { const me = S.P[S.me]; return me && me.max_power ? me.max_power : 100; };
+function loParts(lo) {
+  if (!lo) return null;
+  const d = SKILLS.doctrines[lo.doctrine], ps = (lo.perks || []).map(k => SKILLS.perks[k]).filter(Boolean);
+  return d ? { name: lo.name, preset: lo.preset, d, ps } : null;
+}
+const loIcons = lo => { const p = loParts(lo); return p ? p.d.icon + p.ps.map(x => x.icon).join('') : ''; };
+const loText = lo => { const p = loParts(lo); return p ? `${p.preset ? p.name + ': ' : ''}${p.d.name}${p.ps.length ? ' · ' + p.ps.map(x => x.name).join(' · ') : ''}` : 'No loadout'; };
+/** Spotter: "12 m short · 3 m left" (seen from the shooter, toward the nearest enemy). */
+function spotText(sp) {
+  const L = Math.abs(sp.long) < 1 ? 'on range' : `${Math.round(Math.abs(sp.long))} m ${sp.long < 0 ? 'short' : 'long'}`;
+  const R = Math.abs(sp.right) < 1 ? 'on line' : `${Math.round(Math.abs(sp.right))} m ${sp.right < 0 ? 'left' : 'right'}`;
+  const Q = S.P[sp.seat];
+  return `${L} · ${R}${Q ? ' of ' + Q.name : ''}`;
+}
+
 function init(d) {
   RULES = d.map.rules; MAP = d.map.id; S.map = d.map;
+  if (d.skills) SKILLS = d.skills;
   N = RULES.n; SIZE = N * AT.CELL; HALF = SIZE / 2; MS = HALF / 120; G = RULES.gravity; WATER = RULES.water;
   applyTheme();
   initTerrain(decodeTerrain(d.terrain));
@@ -769,6 +790,7 @@ function init(d) {
   props.build(TH.props, [...S.P.map(p => [p.x, p.z, 9]), ...OBJ.map(o => [o.x, o.z, Math.max(o.hw, o.hd) + 3]), ...(RULES.vent ? [[RULES.vent[0], RULES.vent[1], 26*MS]] : [])]);
   const me = S.P[S.me];
   S.aim.yaw = me.yaw;
+  $('#sPow').max = String(me.max_power || 100);                     // Fortified: 85
   applySnap(d);
   camBehind(me); cam.yaw = cam.tYaw; cam.target.copy(cam.tTarget); cam.dist = 120 * MS;
   S.loaded = true; $('#ovLoad').classList.remove('show');
@@ -780,8 +802,9 @@ function showMapIntro() {
   const m = S.map; if (!m) return;
   $('#mapLine').textContent = m.blurb;
   if (S.match.turn > 1) return;
-  const el = $('#mapIntro'); el.innerHTML = `<div class="mi-name">${esc(m.name)}</div><div class="mi-blurb">${esc(m.blurb)}</div>`;
-  el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, 3600);
+  const los = S.P.filter(q => q.loadout).map(q => `<div class="mi-lo"><b style="color:${q.color.css}">${esc(q.name)}</b> <span class="mi-ic">${loIcons(q.loadout)}</span> ${esc(loText(q.loadout))}${q.max_hp !== 100 ? ` <small>${q.max_hp} hp</small>` : ''}</div>`).join('');
+  const el = $('#mapIntro'); el.innerHTML = `<div class="mi-name">${esc(m.name)}</div><div class="mi-blurb">${esc(m.blurb)}</div>${los ? `<div class="mi-los">${los}</div>` : ''}`;
+  el.hidden = false; el.classList.add('show'); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.hidden = true, 500); }, los ? 6000 : 3600);
 }
 function setDead(P, boom) {
   if (P.dead) return; P.dead = true; P.alive = false;
@@ -796,7 +819,8 @@ function applySnap(d) {
   for (const p of d.players) {
     const P = S.P[p.seat]; if (!P) continue;
     Object.assign(P, { bot: p.bot, hp: p.hp, ammo: p.ammo, item: p.item, online: p.online, strikes: p.strikes, placement: p.placement, damage: p.damage,
-                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z });
+                       kills: p.kills, rating: p.rating, rating_after: p.rating_after, rank: p.rank, x: p.x, y: p.y, z: p.z,
+                       loadout: p.loadout, max_hp: p.max_hp, max_power: p.max_power, arc: p.arc, spotter: p.spotter, level: p.level, xp: p.xp });
     if (!p.alive && !P.dead) setDead(P, false);
     P.alive = p.alive;
   }
@@ -929,6 +953,7 @@ function startEvent(e) {
   if (e.type === 'turn') { startTurnEvent(e); return; }
   if (d.aim && ITEMS[d.aim.weapon]) { P.item = null; banner(`${P.seat === S.me ? 'You fire' : P.name + ' fires'} ${ITEMS[d.aim.weapon].name}!`, 1500); }
   if (d.double) banner(e.seat === S.me ? 'Double Shot: fire again!' : `${P.name}: Double Shot`, 1500);
+  if (e.seat === S.me) recordShot(e);
   P.trails.forEach(t => t.dispose()); P.trails = [];
   for (const Q of S.P) Q.trails.forEach(t => t.line.visible = Q === P);
   S.playing = { kind: 'shot', e, P, owner: P, aim: d.aim, phase: 'turn', t: 0, T: 0, from: { yaw: P.yaw, elev: P.elev },
@@ -936,13 +961,65 @@ function startEvent(e) {
   if (e.seat !== S.me) camBehind(P);
   syncUI();
 }
+/* ---------- shot cards: your last 3 shots, so after a detour (a crate, a drive) you can go back to an aim ---------- */
+const CARDS_KEY = 'art3d_shots_' + MID;
+let CARDS = []; try { CARDS = JSON.parse(localStorage.getItem(CARDS_KEY) || '[]') || []; } catch (e) { CARDS = []; }
+/** What a shot did, from the server's record: damage to enemies, a crate, the Spotter's range report, or a miss. */
+function shotResult(d) {
+  let dmg = 0, crate = null, kill = (d.deaths || []).some(s => s !== S.me);
+  for (const pr of d.projectiles || []) if (pr.boom) {
+    for (const h of pr.boom.hits || []) if (h.seat !== S.me) dmg += h.dmg + (h.abs || 0);
+    for (const c of pr.boom.crates || []) if (c.by === S.me) crate = c.item;
+  }
+  const oob = (d.projectiles || []).every(pr => !pr.boom);
+  return { dmg, kill, crate, spot: d.spot || null, oob };
+}
+function recordShot(e) {
+  const d = e.data; if (!d.aim) return;
+  CARDS.unshift({ turn: e.turn, yaw: d.aim.yaw, elev: d.aim.elev, power: d.aim.power, weapon: d.aim.weapon,
+                  wind: d.wind ? [Math.atan2(d.wind[0], -d.wind[1]), Math.hypot(d.wind[0], d.wind[1])] : null, res: shotResult(d) });
+  CARDS = CARDS.slice(0, 3);
+  try { localStorage.setItem(CARDS_KEY, JSON.stringify(CARDS)); } catch (err) {}
+  renderCards();
+}
+function cardResult(r) {
+  if (r.kill) return '<b class="ok">Destroyed!</b>';
+  if (r.dmg) return `<b class="ok">Hit −${r.dmg}</b>`;
+  if (r.crate) return `<b class="cr">Crate: ${esc(ITEMS[r.crate] ? ITEMS[r.crate].name : r.crate)}</b>`;
+  if (r.spot) return esc(spotText(r.spot));
+  return r.oob ? 'Out of range' : 'Miss';
+}
+function renderCards() {
+  const el = $('#shotCards'); if (!el) return;
+  el.hidden = !CARDS.length;
+  const html = CARDS.map((c, i) => {
+    // the wind relative to that shot's aim: ↑ blew with it (farther), ↓ against it, → / ← pushed it right / left
+    const rel = c.wind ? ((c.wind[0] / D2R - c.yaw) % 360 + 360) % 360 : 0;
+    const w = !c.wind || RULES && RULES.wind_max <= 0 ? 'no wind' : c.wind[1] < .5 ? 'calm'
+      : `<span title="Wind relative to this aim: ↑ with the shot, ↓ against it">${'↑↗→↘↓↙←↖'[Math.round(rel / 45) % 8]}</span> ${c.wind[1].toFixed(1)} m/s`;
+    const wn = WEAPONS[c.weapon] ? WEAPONS[c.weapon].name : ITEMS[c.weapon] ? ITEMS[c.weapon].name : c.weapon;
+    return `<button type="button" class="scard" data-i="${i}" title="Aim like this again (turn ${c.turn})">
+      <span class="ct">T${c.turn} · ${esc(wn)}</span><span class="ca">${Math.round(c.yaw)}° · ${c.elev.toFixed(1)}° · ${c.power.toFixed(1)}</span>
+      <span class="cw">wind ${w}</span><span class="cr2">${cardResult(c.res)}</span></button>`;
+  }).join('');
+  if (html !== el.dataset.html) { el.dataset.html = html; el.innerHTML = html; }   // only when it changed, so a tap never lands on a replaced button
+}
+$('#shotCards') && $('#shotCards').addEventListener('click', ev => {
+  const b = ev.target.closest('.scard'); if (!b) return;
+  const c = CARDS[+b.dataset.i]; if (!c || !myTurn()) return;
+  setAim('yaw', c.yaw); setAim('elev', c.elev); setAim('power', c.power);
+  const me = S.P[S.me];
+  if (WEAPONS[c.weapon] && (!me.ammo || me.ammo[c.weapon] !== 0)) S.aim.weapon = c.weapon;
+  banner(`Aim from turn ${c.turn}${c.power > maxPow() ? ' (power capped)' : ''}`, 1400); syncUI();
+});
+
 /** A power-up used from the weapon bar (shell power-ups arrive as shots instead). */
 function startItemEvent(e) {
   const d = e.data, P = S.P[e.seat], it = ITEMS[d.item] || { name: d.item };
   P.item = null;
   const who = e.seat === S.me ? 'You' : P.name, at = new THREE.Vector3(P.x, P.y + 5, P.z);
   let dur = 1.4;
-  if (d.item === 'repair') { P.hp = Math.min(100, P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
+  if (d.item === 'repair') { P.hp = Math.min(maxHp(P), P.hp + d.heal); popup(`+${d.heal}`, at, '#7bd389'); spawnSmoke(at.clone().setY(P.y + 2), 2.4, 1.2, 0x9fe8b0, 2); }
   else if (d.item === 'shield') { setShield(e.seat, true); shieldHit(e.seat); noise(.6, 900, .25, 1); }
   else if (d.item === 'relocate') {
     const from = new THREE.Vector3(...d.from); spawnSmoke(from, 4, 2.2, 0xcfc8d8, 3); spawnSmoke(from.clone().setY(from.y + 3), 3, 1.8, 0xcfc8d8, 4);
@@ -974,7 +1051,7 @@ function startTurnEvent(e) {
     for (const h of d.sudden.drain) { const Q = S.P[h.seat]; Q.hp = Math.max(0, Q.hp - h.dmg); popup(`-${h.dmg}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#ff8a8a'); }
   }
   if (d.regen) {                                               // heal over time: the tank whose turn it is repairs a little
-    const Q = S.P[d.regen.seat]; Q.hp = Math.min(100, Q.hp + d.regen.heal);
+    const Q = S.P[d.regen.seat]; Q.hp = Math.min(maxHp(Q), Q.hp + d.regen.heal);
     popup(`+${d.regen.heal}`, new THREE.Vector3(Q.x, Q.y + 5, Q.z), '#7bd389');
   }
   if (msgs.length) banner(msgs.join(' '), 2200);
@@ -1047,7 +1124,9 @@ function updateEvent(dt) {
     }
     if (moving) return;
     for (const s of pl.deaths) { const Q = S.P[s]; banner(`${Q.name} destroyed!`, 1500); setDead(Q, true); }
-    pl.phase = 'end'; pl.t = 0; pl.wait = pl.deaths.length ? 1.4 : .8; syncUI();
+    const sp = pl.e && pl.e.type === 'shot' && pl.e.seat === S.me && pl.e.data.spot;
+    if (sp && !pl.deaths.length) { S.lastSpot = sp; banner(`Spotter: ${spotText(sp)}`, 2600); }
+    pl.phase = 'end'; pl.t = 0; pl.wait = pl.deaths.length ? 1.4 : sp ? 1.6 : .8; syncUI();
     return;
   }
   if (pl.phase === 'end') { pl.t += dt; if (pl.t > pl.wait) endEvent(); }
@@ -1120,9 +1199,9 @@ function syncUI() {
   $('#boardStatus').innerHTML = boardStatus();
   $('#rows').innerHTML = S.P.map(q => `<div class="prow${m && q.seat === m.seat && m.status === 'active' ? ' cur' : ''}${q.dead ? ' dead' : ''}">
     <div class="sw" style="background:${q.color.css}"></div>
-    <div class="nm" style="color:${q.color.css}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
+    <div class="nm" style="color:${q.color.css}" title="${esc(loText(q.loadout))}">${esc(q.name)}${q.seat === S.me ? '<small>YOU</small>' : q.bot ? `<small>CPU</small>` : ''}${q.loadout ? `<span class="lo">${loIcons(q.loadout)}</span>` : ''}${q.spotter && q.seat !== S.me ? '<span class="spot" title="Spotter: sees how far each shot lands from the nearest enemy">SPOTTING</span>' : ''}<i class="on${q.online ? '' : ' off'}" title="${q.online ? 'online' : 'offline'}"></i>${q.item && ITEMS[q.item] ? `<span class="it" style="--ic:${ITEMS[q.item].color}" title="Holding ${ITEMS[q.item].name}">${ITEMS[q.item].icon}</span>` : ''}${S.fx && S.fx.shields && S.fx.shields[q.seat] ? '<span class="it sh" title="Shield up">◍</span>' : ''}</div>
     <div class="wins">${q.bot ? `<span class="rk">${AI_NAMES[q.bot] || 'CPU'}</span>` : `<span class="rk" style="color:${q.rank ? q.rank.color : ''}">${q.rank ? q.rank.name : ''}</span> ${q.rating ?? ''}`}</div>
-    <div class="hp"><i style="width:${q.hp}%;background:${q.hp > 50 ? '#7bd389' : q.hp > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
+    <div class="hp"><i style="width:${hpPct(q)}%;background:${hpPct(q) > 50 ? '#7bd389' : hpPct(q) > 25 ? '#f0b429' : '#e5484d'}"></i></div></div>`).join('');
   if (!me) return;
   const cur = m ? S.P[m.seat] : null, mine = myTurn();
   const name = S.playing && S.playing.P ? S.playing.P : cur;
@@ -1130,7 +1209,7 @@ function syncUI() {
   $('#whoName').style.color = mine ? me.color.css : name ? name.color.css : '';
   const dbl = S.fx && S.fx.double, second = dbl && dbl.seat === m?.seat && dbl.shots > 0, armed = dbl && dbl.seat === m?.seat && !dbl.shots;
   $('#whoTag').textContent = !m ? '' : m.status === 'finished' ? 'Battle over' : me.dead ? 'You were destroyed. Watching the battle.'
-    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
+    : S.sent ? 'Firing…' : S.playing ? (S.playing.P ? 'Shot away…' : '') : mine ? (second ? 'Second shot' : armed ? 'Double Shot ready' : S.lastSpot ? 'Last shot: ' + spotText(S.lastSpot) : '') : second ? 'is aiming the second shot…' : cur && cur.bot ? 'CPU is aiming…' : 'is aiming…';
   $('#panel').classList.toggle('off', !mine);
   $('#fire').disabled = !mine;
   document.querySelectorAll('.wep[data-k]').forEach(b => { const k = b.dataset.k, a = me.ammo ? me.ammo[k] : null;
@@ -1139,6 +1218,7 @@ function syncUI() {
   syncItemButton(me, mine);
   syncDriveUI(me, mine);
   $('#forecast').innerHTML = forecastHtml();
+  renderCards();
   syncSliders();
   const bonus = m && RULES ? Math.max(0, m.turn - S.map.sudden_turn + 1) * (S.map.sudden_wind ?? .5) * (RULES.wind_max > 0 ? 1 : 0) : 0;
   $('#windSpd').innerHTML = RULES && RULES.wind_max <= 0 ? 'None' : S.wind.spd < .5 ? 'Calm' : `${S.wind.spd.toFixed(1)} m/s${bonus ? '<small class="sd"> +storm</small>' : ''}`;
@@ -1167,15 +1247,29 @@ function showEnd() {
     return `<tr><td class="place">${ord(p.placement)}</td><td style="color:${p.color.css};font-weight:700">${esc(p.name)}${p.seat === S.me ? ' <small style="color:var(--dim)">YOU</small>' : ''}</td>
       <td>${p.kills}</td><td>${p.damage}</td><td>${rated ? `${p.rating_after ?? p.rating} <span class="${d >= 0 ? 'up' : 'down'}">(${d >= 0 ? '+' : ''}${d})</span>` : ''}</td></tr>`; }).join('')
     + (rated ? '' : `<tr><td colspan="5" class="unrated">${{ private: 'Private match', ai: 'Battle against the AI', casual: 'Casual match' }[S.match.game_mode] || 'Unrated match'}: ratings unchanged.</td></tr>`);
+  $('#eXp').innerHTML = xpHtml(me.xp);
   $('#ovEnd').classList.add('show');
   marker.visible = false;
+}
+/** End screen: the XP this match earned, the level bar, and any skills a new level unlocked. */
+function xpHtml(x) {
+  if (!x || x.total == null) return '';
+  const lines = (x.lines || []).map(([, label, n]) => `<div class="xl"><span>${esc(label)}</span><b>+${n}</b></div>`).join('');
+  let lvl = '';
+  if (x.level_after != null) {
+    const up = x.level_after > x.level_before;
+    const news = up ? [...Object.values(SKILLS.doctrines), ...Object.values(SKILLS.perks)].filter(k => k.level > x.level_before && k.level <= x.level_after) : [];
+    lvl = `<div class="xlvl${up ? ' up' : ''}">${up ? `LEVEL UP! Level ${x.level_after}` : `Level ${x.level_after}`}</div>`
+      + (news.length ? `<div class="xnew">Unlocked: ${news.map(k => `<b>${k.icon} ${esc(k.name)}</b>`).join(', ')}. Pick them in the lobby under Loadout.</div>` : '');
+  }
+  return `<div class="xp-card"><div class="xh"><span>EXPERIENCE</span><b>+${x.total} XP</b></div>${lines}${lvl}</div>`;
 }
 $('#bStay').onclick = () => { $('#ovEnd').classList.remove('show'); camOverview(); };
 const setAim = (k, v) => {
   const a = S.aim;
   if (k === 'yaw') { a.yaw = ((v % 360) + 360) % 360; cam.tYaw = -a.yaw*D2R; }
   else if (k === 'elev') a.elev = clamp(v, 5, 85);
-  else a.power = clamp(v, 10, 100);
+  else a.power = clamp(v, 10, maxPow());
   syncSliders();
 };
 $('#sYaw').addEventListener('input', e => { if (!myTurn()) return syncSliders(); setAim('yaw', +e.target.value); });
@@ -1246,8 +1340,8 @@ function handleKeys(dt) {
   if (has('arrowright', 'd')) { a.yaw = (a.yaw + 60*fine*dt) % 360; ch = true; cam.tYaw = -a.yaw*D2R; }
   if (has('arrowup', 'w')) { a.elev = clamp(a.elev + 25*fine*dt, 5, 85); ch = true; }
   if (has('arrowdown', 's')) { a.elev = clamp(a.elev - 25*fine*dt, 5, 85); ch = true; }
-  if (has('e', '=', '+')) { a.power = clamp(a.power + 25*fine*dt, 10, 100); ch = true; }
-  if (has('q', '-', '_')) { a.power = clamp(a.power - 25*fine*dt, 10, 100); ch = true; }
+  if (has('e', '=', '+')) { a.power = clamp(a.power + 25*fine*dt, 10, maxPow()); ch = true; }
+  if (has('q', '-', '_')) { a.power = clamp(a.power - 25*fine*dt, 10, maxPow()); ch = true; }
   if (ch) syncSliders();
 }
 
@@ -1268,7 +1362,7 @@ function updateVisuals(dt, time) {
     const s = project(v3.set(P.x, P.y + 4.6, P.z));
     if (!s.vis) P.label.style.display = 'none';
     else { P.label.style.display = ''; P.label.style.left = s.x + 'px'; P.label.style.top = s.y + 'px';
-      P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = P.hp + '%'; }
+      P.label.firstChild.textContent = P.dead ? `${P.name} ✕` : P.name; P.label.querySelector('i').style.width = hpPct(P) + '%'; }
   }
   const m = S.match, cur = m && m.status === 'active' && !S.playing && !S.queue.length ? S.P[m.seat] : null;
   if (cur) { marker.visible = true; marker.material.color.setHex(cur.color.hex); marker.position.set(cur.x, cur.y + 7 + Math.sin(time*4)*.4, cur.z); marker.rotation.y += dt*2; }
@@ -1284,7 +1378,7 @@ function updateVisuals(dt, time) {
         for (let k = 0; k < 4; k++) { vel.x += wx*.4*STEP; vel.z += wz*.4*STEP; vel.y -= G*STEP; pos.addScaledVector(vel, STEP); }
         if (pos.y <= heightAt(pos.x, pos.z) || Math.abs(pos.x) > HALF + 4 || Math.abs(pos.z) > HALF + 4) { guide.push(pos.x, Math.max(pos.y, heightAt(pos.x, pos.z)), pos.z); break; }
       }
-    } else for (let i = 0; i < 48; i++) { guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
+    } else for (let i = 0, n = Math.round(48 * (me.arc || 1)); i < n; i++) { /* Sharpshooter: twice as long */ guide.push(pos.x, pos.y, pos.z); for (let k = 0; k < 4; k++) { vel.y -= G*STEP; pos.addScaledVector(vel, STEP); } }
     guide.line.material.color.setHex(full ? 0x9be7c4 : 0xffffff);
     guide.line.visible = true;
   } else guide.line.visible = false;
@@ -1330,4 +1424,6 @@ function loop() {
   } catch (err) { S.playing = null; recover(err, 'replay'); }
 }
 loop(); poll();
+// automated browser tests open the page as play.php?id=N#test to read the page's state
+if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS };
 })();

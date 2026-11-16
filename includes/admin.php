@@ -87,3 +87,27 @@ function admin_status(): array
         'opcache' => function_exists('opcache_get_status') && (@opcache_get_status(false)['opcache_enabled'] ?? false),
     ];
 }
+
+/**
+ * Phase 4 gate, watched on real games: how often each loadout wins finished ranked matches. A draw counts as half a
+ * win; a match with n tanks expects 1/n wins, so "vs fair share" compares the wins with what an average build would get.
+ * Returns rows sorted by win rate: [key, name, matches, wins, rate, share (wins ÷ expected wins)].
+ */
+function admin_loadout_stats(): array
+{
+    $rows = db()->query('SELECT p.loadout, p.placement, m.mode, m.winner_user_id = p.user_id AS won, m.winner_user_id IS NULL AS drawn
+        FROM ' . T('match_players') . ' p JOIN ' . T('matches') . " m ON m.id = p.match_id
+        WHERE m.game_mode = 'ranked' AND m.status = 'finished' AND p.loadout IS NOT NULL AND p.placement IS NOT NULL")->fetchAll();
+    $agg = [];
+    foreach ($rows as $r) {
+        $lo = parse_loadout($r['loadout']); if (!$lo) continue;
+        $k = loadout_key($lo);
+        $agg[$k] ??= ['key' => $k, 'name' => loadout_public($lo)['preset'] ? PRESETS[$lo['preset']]['name'] . ' (preset)' : $k, 'n' => 0, 'w' => 0.0, 'exp' => 0.0];
+        $agg[$k]['n']++; $agg[$k]['exp'] += 1 / max(2, (int)$r['mode']);
+        $agg[$k]['w'] += $r['won'] ? 1.0 : (($r['drawn'] && (int)$r['placement'] === 1) ? .5 : 0.0);
+    }
+    foreach ($agg as &$a) { $a['rate'] = $a['w'] / $a['n']; $a['share'] = $a['exp'] > 0 ? $a['w'] / $a['exp'] : 0; }
+    unset($a);
+    usort($agg, fn($a, $b) => $b['share'] <=> $a['share']);
+    return array_values($agg);
+}

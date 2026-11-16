@@ -18,7 +18,7 @@ for (const m of sims) {
   const H0 = f32(m.initial), n = Math.round(Math.sqrt(H0.length)) - 1;
   if (n !== m.rules.n) throw new Error('size mismatch');
   const T = AT.make(n, H0), WATER = m.rules.water === null ? -100 : m.rules.water;
-  const P = m.spawns.map(s => ({ hp: 100, x: s[0], y: s[1], z: s[2], alive: true, item: null }));
+  const P = m.spawns.map((s, i) => ({ hp: m.hp0 ? m.hp0[i] : 100, x: s[0], y: s[1], z: s[2], alive: true, item: null }));   // phase 4: 125 hp tanks and the like
   const O = m.objects.map(o => ({ ...o }));
   let ops = 0;
   const hurt = (seat, dmg) => { P[seat].hp = Math.max(0, P[seat].hp - dmg); };
