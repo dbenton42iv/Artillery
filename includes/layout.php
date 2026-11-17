@@ -15,7 +15,7 @@ function page_head(string $title, string $bodyClass = ''): void
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css?v=11">
+<link rel="stylesheet" href="assets/app.css?v=12">
 </head>
 <body class="<?= h($bodyClass) ?>">
 <?php }

@@ -9,7 +9,7 @@ defined('ART3D') || exit;
  */
 const CAMPAIGN = [
     ['slug' => 'hold-the-ridge', 'title' => 'Hold the Ridge', 'map' => 'highlands', 'seed' => 23, 'size' => 160,
-     'blurb' => 'Dig in on the ridge. Six waves of enemy tanks parachute onto the far hills. Hold out for 14 rounds, or destroy every one of them.',
+     'blurb' => 'Dig in on the ridge. Six waves of enemy tanks parachute onto the far hills. Hold out for 12 rounds, or destroy every one of them.',
      'players' => [1, 4], 'starts' => [[-22, -16], [-8, -9], [6, -2], [20, 4]],
      'enemies' => [
         ['x' => -62, 'z' => -84, 'level' => 'rookie', 'round' => 1],
@@ -17,10 +17,10 @@ const CAMPAIGN = [
         ['x' => -72, 'z' => 74, 'level' => 'rookie', 'round' => 5], ['x' => 70, 'z' => 80, 'level' => 'rookie', 'round' => 5, 'min' => 3],
         ['x' => 0, 'z' => -96, 'level' => 'rookie', 'round' => 7], ['x' => -96, 'z' => 22, 'level' => 'rookie', 'round' => 7, 'min' => 2],
         ['x' => 92, 'z' => -30, 'level' => 'rookie', 'round' => 9], ['x' => 10, 'z' => 92, 'level' => 'rookie', 'round' => 9, 'min' => 4],
-        ['x' => -50, 'z' => 92, 'level' => 'rookie', 'round' => 11], ['x' => 84, 'z' => 52, 'level' => 'veteran', 'round' => 11, 'min' => 2],
+        ['x' => -50, 'z' => 92, 'level' => 'rookie', 'round' => 11, 'min' => 2], ['x' => 84, 'z' => 52, 'level' => 'veteran', 'round' => 11, 'min' => 3],
         ['x' => -92, 'z' => -58, 'level' => 'rookie', 'round' => 11, 'min' => 3],
      ],
-     'goal' => ['type' => 'survive', 'rounds' => 14], 'limit' => 0, 'stars' => ['shots' => 12, 'damage' => 60],
+     'goal' => ['type' => 'survive', 'rounds' => 12], 'limit' => 0, 'stars' => ['shots' => 10, 'damage' => 75],
      'opts' => ['items' => 'safe', 'drops' => true, 'regen' => 5]],
 
     ['slug' => 'bridge-out', 'title' => 'Bridge Out', 'map' => 'highlands', 'seed' => 11, 'size' => 160,
@@ -38,7 +38,7 @@ const CAMPAIGN = [
      ],
      'rivers' => [['a' => [-112, 16], 'b' => [112, 28], 'w' => 16]],
      'convoy' => ['path' => [[-26, -102], [-58, -66], [-76, -30], [-75, 3]], 'speed' => 16],
-     'goal' => ['type' => 'destroy_targets'], 'limit' => 0, 'stars' => ['shots' => 6, 'damage' => 20],
+     'goal' => ['type' => 'destroy_targets'], 'limit' => 0, 'stars' => ['shots' => 4, 'damage' => 10],
      'opts' => ['items' => 'safe', 'drops' => true]],
 
     ['slug' => 'supply-run', 'title' => 'Supply Run', 'map' => 'archipelago', 'seed' => 7, 'size' => 160,
@@ -55,7 +55,7 @@ const CAMPAIGN = [
         ['type' => 'crate', 'x' => -60, 'z' => -52], ['type' => 'crate', 'x' => 62, 'z' => -50],
         ['type' => 'crate', 'x' => -40, 'z' => 4],
      ],
-     'goal' => ['type' => 'crates', 'count' => 4], 'limit' => 24, 'stars' => ['shots' => 8, 'damage' => 30],
+     'goal' => ['type' => 'crates', 'count' => 4], 'limit' => 24, 'stars' => ['shots' => 12, 'damage' => 10],
      'opts' => ['items' => 'safe', 'drops' => false]],
 
     ['slug' => 'flare-line', 'title' => 'Flare Line', 'map' => 'highlands', 'seed' => 31, 'size' => 160,
@@ -67,7 +67,7 @@ const CAMPAIGN = [
         ['x' => 56, 'z' => -32, 'level' => 'rookie', 'hp' => 70, 'round' => 1, 'min' => 2],
         ['x' => -20, 'z' => -74, 'kind' => 'gun', 'level' => 'rookie', 'hp' => 70, 'round' => 1, 'min' => 3],
      ],
-     'goal' => ['type' => 'destroy_all'], 'limit' => 26, 'stars' => ['shots' => 14, 'damage' => 50],
+     'goal' => ['type' => 'destroy_all'], 'limit' => 26, 'stars' => ['shots' => 12, 'damage' => 45],
      'opts' => ['night' => true, 'flares' => 8, 'items' => 'safe', 'drops' => true]],
 
     ['slug' => 'fortress-siege', 'title' => 'Fortress Siege', 'map' => 'city', 'seed' => 5, 'size' => 160,
@@ -87,19 +87,19 @@ const CAMPAIGN = [
         ['type' => 'wall', 'name' => 'East wall',  'x' => -26, 'z' => 53.5, 'w' => 2.5, 'd' => 12, 'h' => 6, 'hp' => 120],
         ['type' => 'wall', 'name' => 'East wall',  'x' => -26, 'z' => 67.5, 'w' => 2.5, 'd' => 12, 'h' => 6, 'hp' => 120],
      ],
-     'goal' => ['type' => 'destroy_targets'], 'limit' => 25, 'stars' => ['shots' => 12, 'damage' => 45],
+     'goal' => ['type' => 'destroy_targets'], 'limit' => 25, 'stars' => ['shots' => 8, 'damage' => 40],
      'opts' => ['items' => 'safe', 'drops' => true]],
 
     ['slug' => 'eruption', 'title' => 'Eruption', 'map' => 'volcano', 'seed' => 3, 'size' => 160,
      'blurb' => 'The volcano is waking: it erupts every 2nd round. Hold out for 15 rounds against the tanks on the far slopes, or destroy them all.',
      'players' => [1, 4], 'starts' => [[-74, 56], [-58, 72], [-84, 36], [-40, 84]],
      'enemies' => [
-        ['x' => 70, 'z' => -58, 'level' => 'rookie', 'round' => 1],
-        ['x' => 86, 'z' => -26, 'level' => 'rookie', 'round' => 1],
-        ['x' => 36, 'z' => -84, 'level' => 'veteran', 'round' => 1, 'min' => 2],
+        ['x' => 70, 'z' => -58, 'level' => 'veteran', 'round' => 1],
+        ['x' => 86, 'z' => -26, 'level' => 'veteran', 'round' => 1],
+        ['x' => 36, 'z' => -84, 'level' => 'rookie', 'round' => 1, 'min' => 2],
         ['x' => 60, 'z' => 60, 'level' => 'rookie', 'round' => 5, 'min' => 4],
      ],
-     'goal' => ['type' => 'survive', 'rounds' => 15], 'limit' => 0, 'stars' => ['shots' => 10, 'damage' => 60],
+     'goal' => ['type' => 'survive', 'rounds' => 15], 'limit' => 0, 'stars' => ['shots' => 12, 'damage' => 45],
      'opts' => ['items' => 'safe', 'drops' => true, 'erupt' => 2]],
 
     ['slug' => 'the-behemoth', 'title' => 'The Behemoth', 'map' => 'highlands', 'seed' => 23, 'size' => 160,
@@ -112,6 +112,6 @@ const CAMPAIGN = [
         ['x' => -86, 'z' => -12, 'level' => 'rookie', 'round' => 8],
         ['x' => 86, 'z' => -16, 'level' => 'rookie', 'round' => 10, 'min' => 4],
      ],
-     'goal' => ['type' => 'destroy_targets'], 'limit' => 36, 'stars' => ['shots' => 20, 'damage' => 70],
+     'goal' => ['type' => 'destroy_targets'], 'limit' => 40, 'stars' => ['shots' => 26, 'damage' => 70],
      'opts' => ['items' => 'safe', 'drops' => true]],
 ];

@@ -68,7 +68,8 @@ function missions_for(array $u): array
         if ($r['campaign']) $prevStars = (int)($p['stars'] ?? 0);
         $out[] = ['id' => $r['id'], 'title' => $r['title'], 'blurb' => $d['blurb'] ?? '', 'campaign' => $r['campaign'], 'map' => $d['map'] ?? 'highlands',
                   'map_name' => MAPS[$d['map'] ?? 'highlands']['name'] ?? '', 'goal' => mission_goal_text($d), 'night' => !empty($d['opts']['night']),
-                  'players' => $d['players'] ?? [1, 4], 'enemies' => count($d['enemies'] ?? []),
+                  'players' => $d['players'] ?? [1, 4], 'enemies' => count(array_filter($d['enemies'] ?? [], fn($e) => ($e['min'] ?? 1) <= ($d['players'][0] ?? 1))),
+                  'enemies_max' => count($d['enemies'] ?? []),
                   'stars_rule' => ['shots' => (int)($d['stars']['shots'] ?? 0), 'damage' => (int)($d['stars']['damage'] ?? 0)],
                   'stars' => (int)($p['stars'] ?? 0), 'best_shots' => $p['best_shots'] ?? null, 'best_damage' => $p['best_damage'] ?? null,
                   'plays' => (int)($p['plays'] ?? 0), 'wins' => (int)($p['wins'] ?? 0), 'open' => $open];

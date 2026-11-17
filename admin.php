@@ -61,6 +61,13 @@ page_head('Admin', 'lobby'); topbar($u); ?>
   <?php foreach ($msg as [$k, $t]): ?><div class="<?= $k ?>"><?= h($t) ?></div><?php endforeach; ?>
 
   <section class="panel card">
+    <h2>Missions</h2>
+    <p class="muted small">Build co-op missions on any map, test-play them on your own, then publish them to the lobby's Missions tab.
+      The seven campaign missions can be edited or unpublished there too.</p>
+    <a class="btn" href="editor.php">Open the mission editor</a>
+  </section>
+
+  <section class="panel card">
     <h2>Restart the game</h2>
     <p class="muted small">There's no game server process to restart: each request runs PHP and reads the database. "Restart" ends every
       running match with no result (ratings, wins and matches played don't change), clears the matchmaking queue, closes open private rooms

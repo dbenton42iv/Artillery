@@ -211,5 +211,5 @@ page_head('Lobby', 'lobby'); topbar($u); ?>
     </div>
   </section>
 </main>
-<script src="assets/lobby.js?v=7"></script>
+<script src="assets/lobby.js?v=8"></script>
 <?php page_foot();

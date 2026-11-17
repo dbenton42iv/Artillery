@@ -41,6 +41,7 @@ function play_mission(array $def, int $nh, string $level, bool $trace = false, ?
     foreach ($players as &$p) $p['hp'] = max_hp($p);
     unset($p);
     FX::reset(); mission_fx_init($d, $seats, $players);
+    $start = array_map(fn($p) => ['pos' => [$p['x'], $p['y'], $p['z']], 'hp' => $p['hp'], 'alive' => $p['alive']], $players);
     [$wa, $ws] = initial_wind($rules);
     $n = count($players); $seat = 0; $turn = 1; $events = []; $shots = array_fill(0, $nh, 0);
     $hpAfter = array_map(fn($p) => $p['hp'], $players);
@@ -65,6 +66,7 @@ function play_mission(array $def, int $nh, string $level, bool $trace = false, ?
             if (!empty($plan['use'])) {
                 $item = $players[$seat]['item'];
                 $res = item_effect($t, $players, $objects, $seat, $item, $turn);
+                if (isset($res['error'])) { $players[$seat]['item'] = null; $events[] = ['type' => 'item', 'seat' => $seat, 'turn' => $turn, 'data' => ['item' => $item, 'dropped' => true]]; continue; }   // (tests only) can't be used: dropped
                 $players[$seat]['item'] = null;
                 if ($trace && !isset($res['error'])) $events[] = ['type' => 'item', 'seat' => $seat, 'turn' => $turn, 'data' => $res['event']];
                 if (!empty($res['ends_turn'])) break;
@@ -79,6 +81,7 @@ function play_mission(array $def, int $nh, string $level, bool $trace = false, ?
             if ($seat < $nh) $shots[$seat]++;
             $res = simulate_shot($t, $players, $objects, $seat, $plan['yaw'], $plan['elev'], min(max_power($players[$seat]), $plan['power']), $w, $wind, $rules);
             $res['deaths'] = $deaths();
+            $res['aim'] = ['yaw' => $plan['yaw'], 'elev' => $plan['elev'], 'power' => $plan['power'], 'weapon' => $w];
             if ($trace) $events[] = ['type' => 'shot', 'seat' => $seat, 'turn' => $turn, 'data' => $res];
             $out = mission_outcome($rules, $players, $objects);
             $dbl = FX::$e['double'];
@@ -105,7 +108,7 @@ function play_mission(array $def, int $nh, string $level, bool $trace = false, ?
     $r = ['m' => $def['slug'], 'n' => $nh, 'out' => $out, 'rounds' => (int)(FX::$e['round'] ?? 1), 'shots' => round($shotsEach, 1), 'taken' => round($takenEach, 1),
           'stars' => count(array_filter($stars)), 'turns' => $turn, 'secs' => round(microtime(true) - $t0, 1)];
     if ($trace) $r['trace'] = ['rules' => $rules, 'events' => $events, 'objects0' => $gen['objects'], 'objects' => $objects, 'initial' => base64_encode($initial),
-                               'final' => base64_encode($t->pack()), 'players' => $players];
+                               'final' => base64_encode($t->pack()), 'players' => $players, 'start' => $start];
     return $r;
 }
 /** seat_rules() from game.php, which needs the database to load. */

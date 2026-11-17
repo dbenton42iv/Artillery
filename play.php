@@ -77,6 +77,6 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <script src="assets/vendor/three.min.js"></script>
 <script src="assets/terrain.js?v=4"></script>
 <script src="assets/camo.js?v=1"></script>
-<script src="assets/game.js?v=18"></script>
+<script src="assets/game.js?v=19"></script>
 </body>
 </html>

@@ -160,3 +160,34 @@ CREATE TABLE IF NOT EXISTS `art_errors` (
   message TEXT NOT NULL,
   KEY ix_time (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Phase 5: co-op missions (the campaign is added the first time the lobby lists missions)
+CREATE TABLE IF NOT EXISTS `art_missions` (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(24) NOT NULL,
+  title VARCHAR(40) NOT NULL,
+  sort INT NOT NULL DEFAULT 0,
+  campaign TINYINT(1) NOT NULL DEFAULT 0,
+  status ENUM('draft','published') NOT NULL DEFAULT 'draft',
+  def MEDIUMTEXT NOT NULL,
+  author VARCHAR(40) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_slug (slug),
+  KEY ix_status (status, campaign, sort)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `art_scenario_progress` (
+  user_id INT UNSIGNED NOT NULL,
+  mission_id INT UNSIGNED NOT NULL,
+  stars TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  best_shots INT UNSIGNED NULL,
+  best_damage INT UNSIGNED NULL,
+  plays INT UNSIGNED NOT NULL DEFAULT 0,
+  wins INT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, mission_id),
+  FOREIGN KEY (user_id) REFERENCES `art_users`(id) ON DELETE CASCADE,
+  FOREIGN KEY (mission_id) REFERENCES `art_missions`(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

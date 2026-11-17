@@ -103,7 +103,7 @@
         </button>
         ${open ? `<div class="ms-body"><p>${escH(m.blurb)}</p>
           <div class="ms-rules small"><span>★ Complete it</span><span>★ ${m.stars_rule.shots} shots or fewer each</span><span>★ ${m.stars_rule.damage} damage or less each</span></div>
-          <div class="muted small">${pl} · ${m.enemies} enemies${m.plays ? ` · played ${m.plays}, won ${m.wins}${m.best_shots != null ? ` · best: ${m.best_shots} shots, ${m.best_damage} damage` : ''}` : ''}</div>
+          <div class="muted small">${pl} · ${m.enemies === m.enemies_max ? `${m.enemies} enemies` : `${m.enemies} enemies, up to ${m.enemies_max} with more players`}${m.plays ? ` · played ${m.plays}, won ${m.wins}${m.best_shots != null ? ` · best: ${m.best_shots} shots, ${m.best_damage} damage` : ''}` : ''}</div>
           <div class="room-btns">${m.players[0] <= 1 ? '<button class="btn" data-act="solo" type="button">Play solo</button>' : ''}${m.players[1] >= 2 ? '<button class="btn ghost" data-act="coop" type="button">Play with friends</button>' : ''}</div>
         </div>` : m.open ? '' : '<div class="ms-lock small muted">Earn a star on the mission before this one to open it.</div>'}
       </div>`;

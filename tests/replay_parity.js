@@ -18,7 +18,7 @@ for (const m of sims) {
   const H0 = f32(m.initial), n = Math.round(Math.sqrt(H0.length)) - 1;
   if (n !== m.rules.n) throw new Error('size mismatch');
   const T = AT.make(n, H0), WATER = m.rules.water === null ? -100 : m.rules.water;
-  const P = m.spawns.map((s, i) => ({ hp: m.hp0 ? m.hp0[i] : 100, x: s[0], y: s[1], z: s[2], alive: true, item: null }));   // phase 4: 125 hp tanks and the like
+  const P = m.spawns.map((s, i) => ({ hp: m.hp0 ? m.hp0[i] : 100, x: s[0], y: s[1], z: s[2], alive: m.alive0 ? m.alive0[i] : true, item: null }));   // phase 4: 125 hp tanks; phase 5: waves held back
   const O = m.objects.map(o => ({ ...o }));
   let ops = 0;
   const hurt = (seat, dmg) => { P[seat].hp = Math.max(0, P[seat].hp - dmg); };
@@ -32,9 +32,9 @@ for (const m of sims) {
   for (const e of m.events) {
     const d = e.data;
     if (e.type === 'move') {             // the browser's preview (AT.drive) must plan exactly what the server drove
-      const q = d.req, r = AT.drive(T, WATER, q.blk, q.x0, q.z0, q.tx, q.tz, q.budget);
+      const q = d.req, r = q ? AT.drive(T, WATER, q.blk, q.x0, q.z0, q.tx, q.tz, q.budget) : null;
       drives++;
-      if (r.x !== q.raw.x || r.z !== q.raw.z || r.used !== q.raw.used || r.stop !== q.raw.stop || r.path.length !== q.raw.n) driveBad++;
+      if (r && (r.x !== q.raw.x || r.z !== q.raw.z || r.used !== q.raw.used || r.stop !== q.raw.stop || r.path.length !== q.raw.n)) driveBad++;
       [P[e.seat].x, P[e.seat].y, P[e.seat].z] = d.to;
       for (const c of d.pickup || []) { O[c.id].state = 'claimed'; P[c.by].item = c.item; pickups++; }   // drove over a crate
       continue;
@@ -46,6 +46,7 @@ for (const m of sims) {
       continue;
     }
     if (e.type === 'shot' && d.aim && !['shell', 'heavy', 'cluster'].includes(d.aim.weapon)) P[e.seat].item = null;
+    for (const a of d.arrive || []) { const Q = P[a.seat]; [Q.x, Q.y, Q.z] = a.at; Q.alive = true; Q.hp = a.hp; }   // phase 5: a wave parachutes in
     AT.applyAll(T, d.ops); ops += d.ops.length;
     for (const pr of d.bombs || []) boom(pr.boom);
     for (const b of d.burn || []) hurt(b.seat, b.dmg);

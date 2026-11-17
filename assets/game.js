@@ -311,7 +311,7 @@ function buildMissionObject(o) {
   g.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
   scene.add(g);
   const O = { ...o, group: g, mat, tint: mat.color.clone(), gone: false };
-  if (o.goal || o.protect || o.name) { O.label = document.createElement('div'); O.label.className = 'tl obj-l'; $('#labels').appendChild(O.label); }
+  if (o.goal || o.protect) { O.label = document.createElement('div'); O.label.className = 'tl obj-l'; $('#labels').appendChild(O.label); }
   if (o.hp <= 0) { g.visible = false; O.gone = true; } else shade(O);
   return O;
 }
@@ -919,7 +919,7 @@ function init(d) {
   initTerrain(decodeTerrain(d.terrain));
   buildVent();
   S.me = d.me; S.since = d.match.last_event_id; S.shown = S.since;
-  S.mission = d.mission || null;
+  S.mission = d.mission || null; S.fx = d.effects || S.fx;
   S.P = d.players.map(p => ({ seat: p.seat, team: p.team }));                // colorOf() needs the teams first
   S.P = d.players.map(p => {
     const c = colorOf(p), label = document.createElement('div');

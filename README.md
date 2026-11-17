@@ -132,7 +132,7 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
   | Rangefinder | your aim arc shows the whole flight, wind included, for 1 shot | no |
   | Relocate | moves your tank to a random spot at least 40 m away; uses your turn | no |
   | Invisibility | enemies lose sight of your tank for 2 rounds (see below) | no |
-  | Flare | night maps only: arrives with Scenarios (never drops yet) | no |
+  | Flare | night missions: a shell that lights 40 m for 2 rounds (never drops from crates) | no |
 
   Using a power-up doesn't cost your turn, except Relocate. Shell power-ups are loaded from the slot and fired.
 - **Invisibility:** your tank vanishes from other players' screens until the start of your own turn 2 rounds later
@@ -210,6 +210,40 @@ battles for 2–4 players. It is built to live in a **sub-folder of an existing 
 - **Missed turns:** if your clock runs out, your turn is skipped. Three missed turns in a row and you
   are removed from the match. The *Leave* button forfeits the match.
 - **Practice:** `practice.html` is the offline version (hot-seat and CPU opponents, no rating).
+
+## Missions (co-op Scenarios, phase 5)
+
+- **Missions tab** in the lobby: co-op missions against computer tanks, alone or with up to 3 friends (*Play with friends*
+  opens a private room with that mission; the host starts it). Unrated; XP as usual plus **30 XP for each new star**.
+- **Stars:** 1 for completing the mission, 1 for using no more shots per player than the mission's par, 1 for taking no
+  more damage per player than its limit. Best stars, shots and damage are saved per player.
+- **The campaign:** Hold the Ridge, Bridge Out, Supply Run, Flare Line, Fortress Siege, Eruption, The Behemoth. Each opens
+  once you have a star on the one before (admins can play any).
+- **How missions play:**
+  - Players are one team: a teammate's shell or fire never hurts you. Computer tanks don't repair; players do.
+  - Turns go round the players, then the computer tanks. A **round** is one full cycle. Waves, the convoy, flares and
+    round limits count rounds. No sudden death: missions have round limits instead.
+  - **Waves** parachute in at the start of their round, or early if the field is clear.
+  - **Bigger groups** get tougher enemies (hp ×0.8 alone, ×1 for 2, ×1.25 for 3, ×1.5 for 4; targets and walls too),
+    and a mission can add enemies that only come with 2, 3 or 4 players.
+  - **Night:** enemy tanks can't be seen until a flare shell bursts within 40 m of them; they stay lit for 2 rounds,
+    and a ring marks where each was last seen. Players carry flare shells (key F). Shells from unseen guns come out of the dark.
+  - **Convoy:** moves along its route each round; the mission is lost if it reaches the end.
+  - **The Behemoth:** a giant tank with three weak points (main gun, radar mast, shield generator). A blast within 3 m
+    of one does double damage. Losing the main gun switches it to cluster barrages; losing the radar spoils its aim;
+    the shield generator raises a 40 hp shield every 3rd round until destroyed; with two gone it fires twice a turn.
+  - Computer tanks range in like players: their first shot at a target misses by more, then they close in. Driving
+    more than 4 m (you or them) starts it again.
+  - Mission crates can't be wrecked by blasts, only claimed (drive over them, or a shell within 4 m).
+- **Mission editor** (`editor.php`, admins; linked from the admin page): pick a map, size and terrain seed (the map
+  drawn is exactly the ground that will be played), then click to place player starts, enemy tanks, guns and the
+  Behemoth (each with skill, hp, arrival round and minimum players), targets (bunker, bridge span, radar post, fuel
+  tanks), walls, a depot, crates, rivers and a convoy route. Choose the goal (destroy every enemy, destroy the targets,
+  survive, protect the depot, claim crates), round limit and star thresholds. Save drafts, test-play alone (no progress
+  or XP), publish to the Missions tab. Campaign missions can be edited or unpublished, not deleted.
+- **Tests:** `tests/scenario_test.php` (unit checks), `tests/mission_bench.php` + `tests/mission_report.php` (plays the
+  campaign with computer stand-ins for the players), `tests/mission_sims.php` (replay parity for missions),
+  `tests/mission_map.php` (draws a mission from above as a PNG).
 
 ## How it works
 - **The server is the referee.** The browser sends only your aim. The server flies the shell
