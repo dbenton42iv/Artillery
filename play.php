@@ -33,7 +33,7 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 
 <div id="tr">
   <div id="btns">
-    <button class="ibtn" id="bView" title="Overview (V)" aria-label="Overview">⛰<span> Overview</span></button>
+    <button class="ibtn" id="bView" title="Overview (V): your aim arc side-on on your turn; press again for the whole map" aria-label="Overview">⛰<span> Overview</span></button>
     <button class="ibtn" id="bCam" title="Behind tank (C)" aria-label="Behind tank">🎯<span> Behind tank</span></button>
     <button class="ibtn" id="bMute" title="Sound (M)" aria-label="Sound">🔊<span> Sound</span></button>
     <button class="ibtn danger" id="bLeave" aria-label="Leave">🏳<span> Leave</span></button>
@@ -77,6 +77,6 @@ if (!$st->fetchColumn()) redirect('lobby.php');
 <script src="assets/vendor/three.min.js"></script>
 <script src="assets/terrain.js?v=4"></script>
 <script src="assets/camo.js?v=1"></script>
-<script src="assets/game.js?v=19"></script>
+<script src="assets/game.js?v=20"></script>
 </body>
 </html>

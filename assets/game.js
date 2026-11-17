@@ -839,26 +839,74 @@ function popup(text, pos, color) { const el = document.createElement('div'); el.
 /* ---------- camera ---------- */
 const cam = { yaw: .6, pitch: .9, dist: 220, tDist: 220, tPitch: null, tYaw: null, target: new THREE.Vector3(), tTarget: new THREE.Vector3() };
 const maxDist = () => 260 * MS * (DEV.portrait && DEV.phone ? 1.35 : 1);
-function camBehind(p) { if (!p) return; cam.tYaw = -p.yaw*D2R; cam.tDist = DEV.phone && DEV.portrait ? 46 : 34; cam.tPitch = .36; cam.tTarget.set(p.x, p.y + 3, p.z); }
-function camOverview() { cam.tTarget.set(0, 0, 0); cam.tDist = 230 * MS * (DEV.phone && DEV.portrait ? 1.3 : 1); cam.tPitch = 1.0; cam.tYaw = null; }
-function camAt(x, y, z, dist) { cam.tTarget.set(x, y, z); cam.tDist = dist; cam.tPitch = .6; }
+function camBehind(p) { if (!p) return; cam.mode = null; cam.tYaw = -p.yaw*D2R; cam.tDist = DEV.phone && DEV.portrait ? 46 : 34; cam.tPitch = .36; cam.tTarget.set(p.x, p.y + 3, p.z); }
+/* Overview: on your turn it first shows your aim arc side-on (the camera then follows the arc as you aim, and can be
+ * dragged down to ground level); pressed again, or on someone else's turn, it shows the whole map. */
+function camOverview() {
+  if (myTurn() && cam.mode !== 'arc') { cam.mode = 'arc'; arcView(true); return; }
+  cam.mode = null; cam.tTarget.set(0, 0, 0); cam.tDist = 230 * MS * (DEV.phone && DEV.portrait ? 1.3 : 1); cam.tPitch = 1.0; cam.tYaw = null;
+}
+/** Aim the camera at the middle of the shot's whole flight (from the current aim, without wind), from the side, far
+ * enough back to fit all of it. */
+function arcView(first) {
+  const me = S.P[S.me]; if (!me) return;
+  const { o, v } = launch(me, S.aim.yaw, S.aim.elev, S.aim.power), pos = o.clone();
+  let x0 = pos.x, z0 = pos.z, x1 = x0, z1 = z0, top = pos.y, lo = Math.min(pos.y, me.y);
+  for (let i = 0; i < 4000; i++) {
+    v.y -= G*STEP; pos.addScaledVector(v, STEP); top = Math.max(top, pos.y);
+    if (pos.y <= heightAt(pos.x, pos.z) || Math.abs(pos.x) > HALF + 4 || Math.abs(pos.z) > HALF + 4) break;
+  }
+  x1 = pos.x; z1 = pos.z; lo = Math.min(lo, pos.y);
+  // frame your tank, where the shot would land, and the nearest enemy you can see, so the arc can be judged against it
+  const pts = [[x0, z0], [x1, z1]];
+  const foe = S.P.filter(q => q.seat !== S.me && !q.dead && (q.team == null || q.team !== me.team) && !hiddenTank(q) && !(cloakOf(q.seat)))
+    .sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0];
+  if (foe) { pts.push([foe.x, foe.z]); top = Math.max(top, foe.y + 3); lo = Math.min(lo, foe.y); }
+  let span = 0; for (const a of pts) for (const b of pts) span = Math.max(span, Math.hypot(a[0] - b[0], a[1] - b[1]));
+  const xs = pts.map(q => q[0]), zs = pts.map(q => q[1]), h = top - lo;
+  const tx = (Math.min(...xs) + Math.max(...xs)) / 2, tz = (Math.min(...zs) + Math.max(...zs)) / 2;
+  cam.tTarget.set(tx, Math.max(lo + h * .45, heightAt(tx, tz) + 6), tz);   // never inside a ridge between the tanks
+  if (first) {
+    // far enough back to fit the whole arc (55° view, narrower on a phone held upright)
+    const aspect = innerWidth / innerHeight, fit = .5 / Math.tan(Math.min(55 * aspect, 75) / 2 * D2R);
+    const T = cam.tTarget, dist = clamp(Math.max(span * 1.35 * fit + 15, h * 2, 50), 50, maxDist());
+    // side-on: from whichever side lets the camera stay lowest with a clear view of the arc
+    let best = null;
+    for (const side of [90, -90]) {
+      const yaw = -(S.aim.yaw + side) * D2R;
+      for (let p = .22; p <= 1.2; p += .04) {
+        const cp = Math.cos(p), cx = T.x + Math.sin(yaw)*cp*dist, cy = T.y + Math.sin(p)*dist, cz = T.z + Math.cos(yaw)*cp*dist;
+        let clear = cy > heightAt(cx, cz) + 3;
+        for (let i = 1; i < 16 && clear; i++) { const f = i / 16; if (heightAt(T.x + (cx - T.x)*f, T.z + (cz - T.z)*f) + 1.5 > T.y + (cy - T.y)*f) clear = false; }
+        if (clear) { if (!best || p < best.p) best = { yaw, p }; break; }
+      }
+    }
+    best = best || { yaw: -(S.aim.yaw + 90) * D2R, p: .9 };
+    cam.tDist = dist; cam.tYaw = best.yaw; cam.tPitch = best.p;
+  }
+}
+function camAt(x, y, z, dist) { cam.mode = null; cam.tTarget.set(x, y, z); cam.tDist = dist; cam.tPitch = .6; }
 function angDiff(a, b) { let d = (b - a) % (Math.PI*2); if (d > Math.PI) d -= Math.PI*2; if (d < -Math.PI) d += Math.PI*2; return d; }
 function updateCamera(dt) {
   const k = 1 - Math.exp(-dt*4);
   if (cam.tYaw != null) { cam.yaw += angDiff(cam.yaw, cam.tYaw)*k; if (Math.abs(angDiff(cam.yaw, cam.tYaw)) < .002) cam.tYaw = null; }
   if (cam.tPitch != null) { cam.pitch += (cam.tPitch - cam.pitch)*k; if (Math.abs(cam.tPitch - cam.pitch) < .002) cam.tPitch = null; }
+  if (cam.mode === 'arc') { if (myTurn()) arcView(false); else cam.mode = null; }
   cam.dist += (cam.tDist - cam.dist)*k; cam.target.lerp(cam.tTarget, k);
   const cp = Math.cos(cam.pitch);
   camera.position.set(cam.target.x + Math.sin(cam.yaw)*cp*cam.dist, cam.target.y + Math.sin(cam.pitch)*cam.dist, cam.target.z + Math.cos(cam.yaw)*cp*cam.dist);
   const gh = heightAt(camera.position.x, camera.position.z); if (camera.position.y < gh + 2) camera.position.y = gh + 2;
   // keep the view of the target clear: a tank down in a canyon would otherwise be hidden behind the canyon wall,
   // so lift the camera until the line of sight clears the ground (it then looks down into the canyon)
+  // (close views only: from far back it would stop you lowering the camera to look along an arc)
   const T = cam.target, C = camera.position;
-  for (let i = 1; i < 12; i++) {
+  if (cam.dist < 90 * MS) for (let i = 1; i < 12; i++) {
     const f = i / 12, need = T.y + (heightAt(T.x + (C.x - T.x)*f, T.z + (C.z - T.z)*f) + 1.5 - T.y) / f;
     if (need > C.y) C.y = need;
   }
-  camera.lookAt(cam.target);
+  // the arc view sits above the aiming panel: look a little below the target so the scene shows higher on screen
+  if (cam.mode === 'arc') camera.lookAt(cam.target.x, cam.target.y - cam.dist * (DEV.phone ? .12 : .2) * Math.cos(cam.pitch), cam.target.z);
+  else camera.lookAt(cam.target);
 }
 const ptrs = new Map(); let pinch0 = 0, tap = null;
 canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1859,5 +1907,5 @@ function loop() {
 }
 loop(); poll();
 // automated browser tests open the page as play.php?id=N#test to read the page's state
-if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS, cam, camAt, OBJ: () => OBJ, MI };
+if (location.hash === '#test') window.__art = { S, setAim, guide, myTurn, cards: () => CARDS, cam, camAt, camOverview, OBJ: () => OBJ, MI };
 })();
